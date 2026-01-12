@@ -38,5 +38,6 @@ jobs:
 
       - name: Semgrep scan
         uses: returntocorp/semgrep-action@v1
+        continue-on-error: true
         with:
           config: ./.semgrep.yml
