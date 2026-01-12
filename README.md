@@ -1,161 +1,233 @@
-# Focus Squad!!
+# TheStudyMate
 
-Next.js 14 app for the Focus Squad community. Features Google authentication via NextAuth, Supabase integration for task tracking, live session status powered by Telegram bot events, and real-time updates through Supabase Realtime.
+A **Next.js 14** study accountability platform with:
+- **Leaderboards** (ingested via a protected API)
+- **Live voice rooms** (100ms)
+- **Community live chat** + **Web Push notifications**
+- **Planner / task scheduler + notes** (Supabase + migrations)
+- A **site-grounded AI assistant** (crawler + embeddings + Upstash Vector + OpenAI)
 
-## AI Assistant
+> The default public site URL referenced by configuration is `https://thestudymate.vercel.app`.  
+> You can override this via `NEXT_PUBLIC_SITE_URL`.
 
-- Floating “Ask AI” widget (bottom-right) answers site-specific questions with a motivating tone, supports multilingual replies, unique greetings, and off-topic redirection.
-- Intent detection, moderation, PII redaction, RAG retrieval (Upstash Vector + OpenAI Responses API), and latency logging happen per message; no general-purpose answers leak through.
-- Each conversation uses a privacy-safe session ID so anonymous visitors can rate answers; authenticated users automatically attach their Supabase user ID.
-- Per-user memory is **on by default** for signed-in users. They can toggle “Use my messages to improve answers” and trigger “Forget my data” to purge chat logs + memory. Guests can opt out locally.
-- Admins get a dedicated `/admin/chats` dashboard with filters (user/date/RAG usage), CSV/JSON exports, bulk deletion, and detail modals containing question/answer/rating info.
-- Chat logs retain 90 days of history (Supabase trigger enforced) and include redaction status so privacy reviews stay simple.
+---
 
-## Getting Started
+## What problem this solves
 
-1. Install dependencies:
+Studying alone often fails due to weak accountability and inconsistent structure.  
+This project combines:
+- visible progress (**leaderboards**),
+- real-time community momentum (**live voice + chat**),
+- daily planning tools (**scheduler/notes**),
+- and a grounded assistant for fast answers inside the product (**RAG**).
 
-   ```bash
-   npm install
-   ```
+---
 
-2. Copy `.env.example` to `.env.local` (create one with the required keys) and fill in Supabase, Google, Telegram, and cron secrets.
-3. Run the dev server:
+## Main features (implemented in this repo)
 
-   ```bash
-   npm run dev
-   ```
+### Leaderboards
+- Protected ingest endpoint: `POST /api/leaderboard/ingest` (requires secret header)
+- Read endpoints: `GET /api/leaderboard/latest`, `GET /api/leaderboard`
+- Health endpoint: `GET /api/leaderboard/health`
+- Cron route present: `GET /api/cron/leaderboard`
 
-See [`docs/leaderboard_export_contract.md`](./docs/leaderboard_export_contract.md) for the tracker export payload contract and ingest behaviour.
+### Live voice rooms (100ms)
+- Uses `@100mslive/react-sdk`
+- Server-side token flow + room configuration driven by env variables
 
-## Scheduled Checks
+### Community live chat + Web Push
+- Live/community chat routes under `/api/community/...`
+- Web push subscribe/unsubscribe + public key endpoints:
+  - `/api/community/push/public-key`
+  - `/api/community/push/subscribe`
+  - `/api/community/push/unsubscribe`
+  - plus live-room equivalents under `/api/community/live/push/...`
 
-Configure a hosted cron (for example, [Vercel Cron Jobs](https://vercel.com/docs/cron-jobs)) to call the leaderboard health endpoint every day at 21:10 Asia/Tashkent (16:10 UTC). The job should use a simple GET request:
+### Planner / scheduler + notes (Supabase migrations included)
+- Task scheduler + recurrence + notes/habits are represented in Supabase migrations under:
+  - `supabase/migrations/*task_scheduler*`
+  - `supabase/migrations/*notes*`
+  - `supabase/migrations/*recurrence*`
 
-```text
-10 16 * * * https://YOUR_DOMAIN/api/leaderboard/health
-```
+### Site-grounded AI assistant (RAG)
+- Uses OpenAI for moderation + embeddings + generation
+- Uses Upstash Vector for retrieval
+- Uses a crawler/indexer flow controlled by `SITE_BASE_URL`, allow/block path lists, and secrets
+- AI chat storage includes redaction + DB retention (90-day cleanup trigger is present in migrations)
 
-The endpoint returns `{ ok, latestPostedAt, scopes }` and logs an error whenever a scope is missing or has not been updated in the last 24 hours.
+Relevant endpoints:
+- `POST /api/chat`
+- `POST /api/reindex`
+- `GET/POST /api/cron/nightly-reindex`
 
-## Web Push Setup
+Vercel cron is configured (see `vercel.json`) to hit:
+- `/api/cron/nightly-reindex`
 
-Generate a VAPID key pair (run once) and copy the values into `.env.local`:
+---
 
+## Tech stack
+
+- Next.js 14 (App Router), React 18, TypeScript
+- TailwindCSS
+- NextAuth (`/api/auth/[...nextauth]`)
+- Supabase (Postgres + migrations)
+- OpenAI (moderation/embeddings/generation)
+- Upstash Vector (retrieval)
+- 100ms (live voice)
+- Web Push (`web-push`)
+
+---
+
+## Run locally
+
+### 1) Install
 ```bash
-node -e "const webpush = require('web-push'); const keys = webpush.generateVAPIDKeys(); console.log(keys);"
+npm ci
 ```
 
-Add the resulting values as:
-
-```env
-VAPID_PUBLIC_KEY=...
-VAPID_PRIVATE_KEY=...
-NEXT_PUBLIC_VAPID_PUBLIC_KEY=...
-VAPID_SUBJECT=mailto:hello@example.com
+### 2) Configure environment
+```bash
+cp .env.example .env.local
 ```
 
-`VAPID_SUBJECT` can be a `mailto:` address or an HTTPS origin that identifies your application.
-
-## AI Chatbot & Crawler Configuration
-
-Set the following variables in `.env.local` to enable the AI-powered crawler and chat features (all values shown below are examples only—never commit real keys):
-
-- `OPENAI_API_KEY` – server-side API key used for both generation and embedding requests to OpenAI.
-- `OPENAI_GEN_MODEL` – model identifier for chat/generation calls (defaults to `gpt-5-mini`).
-- `OPENAI_EMBED_MODEL` – embedding model used when vectorizing crawled content (defaults to `text-embedding-3-small`, which matches a 1536-dimension Upstash index).
-- `UPSTASH_VECTOR_REST_URL` – REST endpoint for your Upstash Vector index.
-- `UPSTASH_VECTOR_REST_TOKEN` – Upstash Vector REST token; keep private so only backend jobs can manage vectors.
-- `UPSTASH_INDEX_NAME` – logical name of the Upstash Vector index the crawler writes to and the chatbot reads from (defaults to `focus-squad-site` so Preview/Prod can use different indices).
-- `UPSTASH_VECTOR_DIM` – dimension of the Upstash index (e.g., `1536`). This **must** match the embedding model you pick (`text-embedding-3-small` = 1536, `text-embedding-3-large` = 3072), otherwise Upstash rejects queries/upserts.
-- `SITE_BASE_URL` – canonical site origin the crawler starts from (e.g., `https://thestudymate.vercel.app`).
-- `INDEXER_SECRET` – shared secret required by any indexer webhook/cron to prevent unauthorized crawls.
-- `CRAWL_MAX_PAGES` – safety limit on how many unique pages to visit per crawl run.
-- `CRAWL_MAX_DEPTH` – maximum link depth from the base URL; helps bound crawl time.
-- `CRAWL_ALLOWED_PATHS` – comma-separated list of path prefixes the crawler should include.
-- `CRAWL_BLOCKED_PATHS` – comma-separated list of path prefixes to exclude (useful for `/api`, build assets, etc.). Defaults block `/admin`, `/dashboard`, `/signin`, `/api`, `/_next`, `/static`, `/assets`, `/community/admin`.
-- `POST_DEPLOY_REINDEX_URL` – optional host override that `scripts/trigger-reindex.mjs` should hit after a successful deploy (falls back to the new Vercel deployment URL automatically).
-- `USE_MOCK_AI` / `USE_MOCK_VECTOR` – optional toggles (`0`/`1`) that enable deterministic, in-memory embeddings + vector storage for local development so you can test the workflow without hitting OpenAI or Upstash quotas. When these are `1`, you can also adjust `MOCK_EMBED_DIM` (default `1536`) to match your Upstash index dimension.
-
-## Reindex Automation
-
-`vercel.json` defines a daily cron that reindexes production content at **16:00 UTC** (21:00 Asia/Tashkent) by calling `/api/cron/nightly-reindex`:
-
-```json
-{
-  "crons": [{ "path": "/api/cron/nightly-reindex", "schedule": "0 16 * * *" }]
-}
+### 3) Start dev server
+```bash
+npm run dev
 ```
 
-Successful Vercel deploys also run `scripts/trigger-reindex.mjs` (hooked via `npm run postbuild`), which waits for the deployment URL to come online and POSTs `/api/reindex` using the bearer secret. Trigger the job manually with the shared secret:
+The dev server runs on:
+- `http://localhost:3000`
 
-- Local test (after `npm run dev`):
+---
 
-  ```bash
-  curl -X POST http://localhost:3000/api/reindex \
-    -H "Authorization: Bearer ${INDEXER_SECRET}"
-  ```
+## Environment variables
 
-- Production (replace the domain if needed):
+These are **names only** (never commit values).  
+The required variables are listed in `.env.example`.
 
-  ```bash
-  curl -X POST https://thestudymate.vercel.app/api/reindex \
-    -H "Authorization: Bearer ${INDEXER_SECRET}"
-  ```
+### Supabase
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 
-## Scripts
+### NextAuth + OAuth
+- `NEXTAUTH_URL`
+- `NEXTAUTH_SECRET`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GITHUB_ID`
+- `GITHUB_SECRET`
 
-- `npm run dev` – start development server (port 3000)
-- `npm run build` – production build
-- `npm run start` – start production server
-- `npm run lint` – run ESLint
+### Telegram integration
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_GROUP_ID`
+- `TELEGRAM_BOT_USERNAME`
+- `PUBLIC_TG_GROUP_LINK`
 
-## SEO & Indexing
+### Cron/Webhook secret
+- `CRON_SECRET`
 
-- `NEXT_PUBLIC_SITE_URL` must be set on Vercel so canonical URLs resolve correctly.
-- `NEXT_PUBLIC_GOOGLE_SITE_VERIFICATION` is optional and only needed if you plan to prove ownership in Google Search Console.
-- `npm run build` runs `next-sitemap` (via `postbuild`) which regenerates `public/sitemap.xml` and `public/robots.txt`.
-- Private/admin routes are excluded automatically through `next-sitemap.config.js`.
+### Web push
+- `VAPID_PUBLIC_KEY`
+- `VAPID_PRIVATE_KEY`
+- `NEXT_PUBLIC_VAPID_PUBLIC_KEY`
+- `VAPID_SUBJECT`
 
-## ALL Vercel Environment Variables Keys
+### Leaderboard ingest
+- `LEADERBOARD_INGEST_SECRET`
+- `LEADERBOARD_TIMEZONE` (defaults to `Asia/Tashkent`)
 
-<!-- markdownlint-disable MD033 MD034 -->
+### OpenAI
+- `OPENAI_API_KEY`
+- `OPENAI_GEN_MODEL` (default in `.env.example`: `gpt-5-mini`)
+- `OPENAI_EMBED_MODEL` (default in `.env.example`: `text-embedding-3-small`)
 
-```env
-APP_URL="https://thestudymate.vercel.app"
-CRON_SECRET="SET_IN_VERCEL"
-GOOGLE_CLIENT_ID="YOUR_GOOGLE_OAUTH_CLIENT_ID"
-GOOGLE_CLIENT_SECRET="YOUR_GOOGLE_OAUTH_CLIENT_SECRET"
-INDEXER_SECRET="YOUR_INDEXER_SECRET"
-LEADERBOARD_INGEST_SECRET="YOUR_LEADERBOARD_INGEST_SECRET"
-NEXTAUTH_SECRET="YOUR_NEXTAUTH_SECRET"
-NEXTAUTH_URL="https://thestudymate.vercel.app"
-NEXT_PUBLIC_SITE_URL="https://thestudymate.vercel.app"
-NEXT_PUBLIC_SUPABASE_ANON_KEY="YOUR_NEXT_PUBLIC_SUPABASE_ANON_KEY"
-NEXT_PUBLIC_SUPABASE_URL="https://rwjebnqymstetwgvwskm.supabase.co"
-NEXT_PUBLIC_TZ="Asia/Tashkent"
-NEXT_PUBLIC_VAPID_PUBLIC_KEY="YOUR_PUBLIC_VAPID_KEY"
-OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
-OPENAI_EMBED_MODEL="text-embedding-3-small"
-OPENAI_GEN_MODEL="gpt-5-mini"
-POST_DEPLOY_REINDEX_URL=""
-PUBLIC_TG_GROUP_LINK="https://t.me/studymate"
-SITE_BASE_URL="https://thestudymate.vercel.app"
-SUPABASE_ANON_KEY="YOUR_SUPABASE_ANON_KEY"
-SUPABASE_SERVICE_ROLE_KEY="YOUR_SUPABASE_SERVICE_ROLE_KEY"
-SUPABASE_URL="https://rwjebnqymstetwgvwskm.supabase.co"
-TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN"
-TELEGRAM_BOT_USERNAME="StudyMate_bot"
-TELEGRAM_GROUP_ID="YOUR_TELEGRAM_GROUP_ID"
-TELEGRAM_WEBHOOK_SECRET="YOUR_TELEGRAM_WEBHOOK_SECRET"
-UPSTASH_INDEX_NAME="focus-squad-site"
-UPSTASH_VECTOR_REST_TOKEN="YOUR_UPSTASH_VECTOR_REST_TOKEN"
-UPSTASH_VECTOR_REST_URL="https://noble-moose-77370-us1-vector.upstash.io"
-VAPID_PRIVATE_KEY="YOUR_PRIVATE_VAPID_KEY"
-VAPID_PUBLIC_KEY="YOUR_PUBLIC_VAPID_KEY"
-VAPID_SUBJECT="https://thestudymate.vercel.app"
-WEB_PUSH_PRIVATE_KEY="YOUR_WEB_PUSH_PRIVATE_KEY"
-WEB_PUSH_PUBLIC_KEY="YOUR_WEB_PUSH_PUBLIC_KEY"
-```
+### Upstash Vector
+- `UPSTASH_VECTOR_REST_URL`
+- `UPSTASH_VECTOR_REST_TOKEN`
+- `UPSTASH_INDEX_NAME` (default: `focus-squad-site`)
+- `UPSTASH_VECTOR_DIM` (default: `1536`)
 
-<!-- markdownlint-enable MD033 MD034 -->
+### Crawler / indexing
+- `SITE_BASE_URL`
+- `INDEXER_SECRET`
+- `CRAWL_MAX_PAGES`
+- `CRAWL_MAX_DEPTH`
+- `CRAWL_ALLOWED_PATHS`
+- `CRAWL_BLOCKED_PATHS`
+- `POST_DEPLOY_REINDEX_URL` (optional)
+
+### 100ms Live Voice Rooms
+- `HMS_APP_ACCESS_KEY`
+- `HMS_APP_SECRET`
+- `HMS_TEMPLATE_ID`
+- `NEXT_PUBLIC_SITE_URL`
+- `LIVE_ROOMS_DEFAULT_MAX_SIZE` (default: `30`)
+- `LIVE_ROOMS_DEFAULT_VISIBILITY` (default: `public`)
+
+---
+
+## Optional dev/testing flags (used in code, not listed in `.env.example`)
+
+These are read directly from `process.env` by the AI/RAG modules:
+- `USE_MOCK_AI`
+- `USE_MOCK_VECTOR`
+- `MOCK_EMBED_DIM`
+
+---
+
+## Database (Supabase)
+
+SQL migrations are under:
+- `supabase/migrations/`
+
+Apply them to your Supabase project (chronological order).  
+They include schemas for:
+- leaderboards + ingest logs/metadata
+- AI chat logs/memory/preferences + retention cleanup trigger (90 days)
+- scheduler / recurrence / notes-related tables
+
+---
+
+## AI assistant: indexing & reindexing
+
+### Manual reindex
+`POST /api/reindex`
+
+Auth (one of):
+- `Authorization: Bearer <INDEXER_SECRET>`
+- `x-indexer-secret: <INDEXER_SECRET>`
+
+What it does:
+- crawls site pages from `SITE_BASE_URL`
+- chunks + embeds content
+- upserts vectors to Upstash Vector
+- stores reindex state in Supabase (`rag_reindex_state`)
+
+### Nightly reindex (cron)
+- `/api/cron/nightly-reindex` (scheduled via `vercel.json`)
+
+---
+
+## Security posture (implemented in code)
+
+- `middleware.ts` applies security headers and CSRF protections (via `lib/security-headers` and `lib/csrf*`)
+- AI chat logging applies redaction before storage (see `lib/ai-chat/redaction.ts`)
+- AI chat retention cleanup trigger exists in Supabase migrations (90 days)
+
+---
+
+## My role & contributions
+
+I led the project as product owner + context/architecture engineer:
+- defined product flows and integration design
+- handled configuration, deployment, and system-level debugging
+- used AI-assisted coding tools for implementation acceleration while owning final decisions and shipping
+
+---
+
+## License
+
+Add a license file if/when you decide the intended openness level.
