@@ -3,6 +3,7 @@
 import { useMemo, useState, useCallback, useEffect, type FormEvent } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
+import { csrfFetch } from "@/lib/csrf-client";
 import {
   resolveSignInError,
   sanitizeCallbackPath,
@@ -167,7 +168,7 @@ export default function SignInInteractive({
 
       try {
         if (mode === "register") {
-          const response = await fetch("/api/auth/register", {
+          const response = await csrfFetch("/api/auth/register", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
