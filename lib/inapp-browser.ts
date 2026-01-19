@@ -1,3 +1,5 @@
+import { sanitizeCallbackPath } from "./signin-messages";
+
 export function isTelegramWebView(ua?: string): boolean {
   if (typeof ua !== "string" || ua.length === 0) return false;
   return /telegram/i.test(ua);
@@ -14,7 +16,7 @@ function isRelativePath(value: string): boolean {
   return value.startsWith("/") && !value.startsWith("//");
 }
 
-function stripTelegramInAppFromCallback(value: string): string {
+export function stripTelegramInAppFromCallback(value: string): string {
   if (!isRelativePath(value)) return value;
   try {
     const callbackUrl = new URL(value, "https://example.com");
@@ -31,27 +33,54 @@ function stripTelegramInAppFromCallback(value: string): string {
 export function buildExternalSigninUrl(currentUrl: string): string {
   try {
     const url = new URL(currentUrl);
-    url.pathname = "/signin";
     url.hash = "";
-    url.searchParams.set("src", "telegram");
-    const inappValues = url.searchParams.getAll(TELEGRAM_INAPP_PARAM);
-    if (inappValues.some(isTelegramInAppParam)) {
-      url.searchParams.delete(TELEGRAM_INAPP_PARAM);
-    }
-    const callbackValues = url.searchParams.getAll("callbackUrl");
-    if (callbackValues.length > 0) {
-      const cleanedValues = callbackValues.map(stripTelegramInAppFromCallback);
-      if (
-        cleanedValues.some((value, index) => value !== callbackValues[index])
-      ) {
-        url.searchParams.delete("callbackUrl");
-        for (const value of cleanedValues) {
-          url.searchParams.append("callbackUrl", value);
-        }
-      }
-    }
-    return url.toString();
+    const callback = stripTelegramInAppFromCallback(url.pathname + url.search);
+    return buildContinueConfirmUrl(url.toString(), callback);
   } catch {
-    return "/signin?src=telegram";
+    return "/continue/confirm?callbackUrl=/";
+  }
+}
+
+export function buildContinueConfirmUrl(
+  baseUrl: string,
+  callbackUrl: string,
+): string {
+  const cleanedCallback = stripTelegramInAppFromCallback(callbackUrl);
+  const safeCallback = sanitizeCallbackPath(cleanedCallback) ?? "/";
+  try {
+    const base = new URL(baseUrl);
+    const confirm = new URL("/continue/confirm", base);
+    confirm.searchParams.set("callbackUrl", safeCallback);
+    return confirm.toString();
+  } catch {
+    return `/continue/confirm?callbackUrl=${encodeURIComponent(safeCallback)}`;
+  }
+}
+
+export type AndroidIntentOptions = {
+  chromePackage?: boolean;
+};
+
+export function buildAndroidIntentUrl(
+  targetUrl: string,
+  options?: AndroidIntentOptions,
+): string | null {
+  try {
+    const url = new URL(targetUrl);
+    const isLocalhost =
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "::1";
+    const scheme = isLocalhost ? "http" : "https";
+    const parts = [
+      `intent://${url.host}${url.pathname}${url.search}#Intent;scheme=${scheme};`,
+    ];
+    if (options?.chromePackage) {
+      parts.push("package=com.android.chrome;");
+    }
+    parts.push("end");
+    return parts.join("");
+  } catch {
+    return null;
   }
 }

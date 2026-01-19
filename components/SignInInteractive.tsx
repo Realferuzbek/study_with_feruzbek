@@ -10,6 +10,7 @@ import {
   SWITCH_ACCOUNT_DISABLED_NOTICE,
 } from "@/lib/signin-messages";
 import {
+  buildAndroidIntentUrl,
   buildExternalSigninUrl,
   isTelegramInAppParam,
   isTelegramWebView,
@@ -555,32 +556,4 @@ export default function SignInInteractive({
       </div>
     </>
   );
-}
-
-type AndroidIntentOptions = {
-  chromePackage?: boolean;
-};
-
-function buildAndroidIntentUrl(
-  targetUrl: string,
-  options?: AndroidIntentOptions,
-): string | null {
-  try {
-    const url = new URL(targetUrl);
-    const isLocalhost =
-      url.hostname === "localhost" ||
-      url.hostname === "127.0.0.1" ||
-      url.hostname === "::1";
-    const scheme = isLocalhost ? "http" : "https";
-    const parts = [
-      `intent://${url.host}${url.pathname}${url.search}#Intent;scheme=${scheme};`,
-    ];
-    if (options?.chromePackage) {
-      parts.push("package=com.android.chrome;");
-    }
-    parts.push("end");
-    return parts.join("");
-  } catch {
-    return null;
-  }
 }

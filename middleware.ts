@@ -13,7 +13,11 @@ import {
   buildBlockedRedirectUrl,
   isBlockedFlag,
 } from "./lib/blocked-user-guard";
-import { isTelegramInAppParam } from "./lib/inapp-browser";
+import { sanitizeCallbackPath } from "./lib/signin-messages";
+import {
+  isTelegramInAppParam,
+  stripTelegramInAppFromCallback,
+} from "./lib/inapp-browser";
 
 type EnvMap = Record<string, string | undefined>;
 
@@ -76,6 +80,7 @@ function buildSecurityContext(req: NextRequest) {
 }
 
 const PUBLIC_PATHS = new Set<string>([
+  "/continue",
   "/signin",
   "/api/auth",
   "/api/live",
@@ -96,6 +101,14 @@ const PUBLIC_API_BYPASS_PATHS = ["/api/leaderboard/ingest"];
 
 // treat common static assets as public
 const STATIC_EXT = /\.(?:png|svg|jpg|jpeg|gif|webp|ico|txt|xml|html)$/i;
+const REAL_BROWSER_COOKIE = "sm_real_browser";
+const MOBILE_UA_REGEX = /android|iphone|ipad|ipod/i;
+const CONTINUE_GATE_PREFIXES = ["/api/", "/_next/", "/continue"];
+const CONTINUE_GATE_EXACT_PATHS = new Set<string>([
+  "/favicon.ico",
+  "/robots.txt",
+  "/sitemap.xml",
+]);
 
 function isPublic(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -107,6 +120,24 @@ function isPublic(req: NextRequest) {
   if (STATIC_EXT.test(pathname)) return true;
   for (const p of PUBLIC_PATHS) if (pathname.startsWith(p)) return true;
   return false;
+}
+
+function isMobileUserAgent(ua: string): boolean {
+  return MOBILE_UA_REGEX.test(ua);
+}
+
+function shouldBypassContinueGate(pathname: string): boolean {
+  if (STATIC_EXT.test(pathname)) return true;
+  if (CONTINUE_GATE_EXACT_PATHS.has(pathname)) return true;
+  return CONTINUE_GATE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+}
+
+function buildContinueCallbackPath(
+  url: Pick<URL, "pathname" | "search">,
+): string {
+  const raw = url.pathname + url.search;
+  const cleaned = stripTelegramInAppFromCallback(raw);
+  return sanitizeCallbackPath(cleaned) ?? "/";
 }
 
 function isBypassPath(pathname: string): boolean {
@@ -227,6 +258,23 @@ export async function middleware(req: NextRequest) {
   const securityContext = isTimerFeaturePage
     ? { ...baseSecurityContext, allowIframe: true }
     : baseSecurityContext;
+
+  const ua = req.headers.get("user-agent") ?? "";
+  const isMobile = isMobileUserAgent(ua);
+  const confirmedBrowser =
+    req.cookies.get(REAL_BROWSER_COOKIE)?.value === "1";
+  const shouldGate =
+    (req.method === "GET" || req.method === "HEAD") &&
+    isMobile &&
+    !confirmedBrowser &&
+    !shouldBypassContinueGate(url.pathname);
+  if (shouldGate) {
+    const callbackUrl = buildContinueCallbackPath(url);
+    const continueUrl = new URL("/continue", req.url);
+    continueUrl.searchParams.set("callbackUrl", callbackUrl);
+    const redirect = NextResponse.redirect(continueUrl);
+    return applySecurityHeaders(redirect, securityContext);
+  }
 
   const isTimerPath = url.pathname.startsWith("/timer/");
   const isTelegramInapp = isTelegramInAppParam(url.searchParams.get("inapp"));
@@ -389,8 +437,10 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // EFFECT: Skips middleware on static assets and public signin/timer pages to trim TTFB.
+  // EFFECT: Skips middleware on static assets while covering root/signin for the continue gate.
   matcher: [
+    "/",
+    "/signin",
     "/timer/flip_countdown_new/index.html",
     "/((?!$|_next|signin|.*\\.(?:ico|png|jpg|jpeg|gif|svg|webp|avif|css|js|woff2?|txt|json)$).+)",
   ],
