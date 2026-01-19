@@ -1,5 +1,6 @@
 import LiveRoomsLobby from "@/components/live/LiveRoomsLobby";
 import { getCachedSession } from "@/lib/server-session";
+import AuthRequiredPanel from "@/components/AuthRequiredPanel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,25 +17,29 @@ export default async function LiveRoomsFeature() {
       }
     | undefined;
 
-  const lobbyUser = user?.id
-    ? {
-        id: user.id,
-        displayName: user.display_name ?? null,
-        name: user.name ?? null,
-        email: user.email ?? null,
-        isAdmin: user.is_admin ?? false,
-      }
-    : {
-        id: "guest",
-        displayName: "Guest",
-        name: "Guest",
-        email: null,
-        isAdmin: false,
-      };
+  if (!user?.id) {
+    return (
+      <div className="min-h-[100dvh] bg-[#07070b] text-white">
+        <AuthRequiredPanel
+          title="Sign in to join live rooms"
+          description="Browse live rooms and join the conversation once you're signed in."
+          callbackUrl="/feature/live"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="bg-[#07070b] min-h-[100dvh]">
-      <LiveRoomsLobby user={lobbyUser} />
+      <LiveRoomsLobby
+        user={{
+          id: user.id,
+          displayName: user.display_name ?? null,
+          name: user.name ?? null,
+          email: user.email ?? null,
+          isAdmin: user.is_admin ?? false,
+        }}
+      />
     </div>
   );
 }

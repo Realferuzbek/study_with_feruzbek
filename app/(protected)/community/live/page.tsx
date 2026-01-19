@@ -2,15 +2,23 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { cookies, headers } from "next/headers";
-import { redirect } from "next/navigation";
 import { getCachedSession } from "@/lib/server-session";
 import LiveChatClient from "@/components/community/LiveChatClient";
+import AuthRequiredPanel from "@/components/AuthRequiredPanel";
 
 export default async function LiveCommunityPage() {
   const session = await getCachedSession();
   const me = session?.user as any;
   if (!me?.id) {
-    redirect("/signin");
+    return (
+      <div className="min-h-[100dvh] bg-[#07070f] text-white">
+        <AuthRequiredPanel
+          title="Sign in to join the live chat"
+          description="Jump into the community chat once you're signed in."
+          callbackUrl="/community/live"
+        />
+      </div>
+    );
   }
 
   const user = {

@@ -13,9 +13,6 @@ import {
   buildBlockedRedirectUrl,
   isBlockedFlag,
 } from "./lib/blocked-user-guard";
-import {
-  isTelegramInAppParam,
-} from "./lib/inapp-browser";
 
 type EnvMap = Record<string, string | undefined>;
 
@@ -80,10 +77,6 @@ function buildSecurityContext(req: NextRequest) {
 const PUBLIC_PATHS = new Set<string>([
   "/continue",
   "/signin",
-  "/dashboard",
-  "/leaderboard",
-  "/community",
-  "/feature",
   "/api/auth",
   "/api/live",
   "/api/reindex",
@@ -104,8 +97,20 @@ const PUBLIC_API_BYPASS_PATHS = ["/api/leaderboard/ingest"];
 // treat common static assets as public
 const STATIC_EXT = /\.(?:png|svg|jpg|jpeg|gif|webp|ico|txt|xml|html)$/i;
 
+function isAdminPath(pathname: string): boolean {
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) return true;
+  if (pathname === "/community/admin" || pathname.startsWith("/community/admin/")) {
+    return true;
+  }
+  if (pathname === "/leaderboard/admin" || pathname.startsWith("/leaderboard/admin/")) {
+    return true;
+  }
+  return false;
+}
+
 function isPublic(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  if (isAdminPath(pathname)) return false;
   if (pathname === "/") return true;
   if (pathname === "/api/chat") return true;
   if (pathname === "/api/chat/status") return true;
@@ -236,26 +241,6 @@ export async function middleware(req: NextRequest) {
     : baseSecurityContext;
 
   const isTimerPath = url.pathname.startsWith("/timer/");
-  const isTelegramInapp = isTelegramInAppParam(url.searchParams.get("inapp"));
-  const isTelegramRedirectAllowed =
-    req.method === "GET" &&
-    isTelegramInapp &&
-    !isTimerFeaturePage &&
-    !isTimerPath &&
-    !url.pathname.startsWith("/signin") &&
-    !url.pathname.startsWith("/api/") &&
-    !isPublic(req);
-  if (isTelegramRedirectAllowed) {
-    const cleaned = new URL(req.url);
-    cleaned.searchParams.delete("inapp");
-    const callback = cleaned.pathname + cleaned.search;
-
-    const signin = new URL("/signin", req.url);
-    signin.searchParams.set("inapp", "telegram");
-    signin.searchParams.set("callbackUrl", callback);
-    const redirect = NextResponse.redirect(signin);
-    return applySecurityHeaders(redirect, securityContext);
-  }
 
   // Allow iframe embedding for timer HTML files and make timer assets public
   if (isTimerPath) {
@@ -298,10 +283,14 @@ export async function middleware(req: NextRequest) {
       const resp = NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       return applySecurityHeaders(resp, securityContext);
     }
-    const signin = new URL("/signin", req.url);
-    signin.searchParams.set("callbackUrl", url.pathname + url.search);
-    const redirect = NextResponse.redirect(signin);
-    return applySecurityHeaders(redirect, securityContext);
+    if (isAdminPath(url.pathname)) {
+      const signin = new URL("/signin", req.url);
+      signin.searchParams.set("callbackUrl", url.pathname + url.search);
+      const redirect = NextResponse.redirect(signin);
+      return applySecurityHeaders(redirect, securityContext);
+    }
+    const resp = NextResponse.next();
+    return applySecurityHeaders(resp, securityContext);
   }
 
   if (isBlockedFlag((token as any).is_blocked)) {

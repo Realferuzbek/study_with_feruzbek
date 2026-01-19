@@ -1,5 +1,6 @@
 import LiveVoiceRoom from "@/components/live/LiveVoiceRoom";
 import { getCachedSession } from "@/lib/server-session";
+import AuthRequiredPanel from "@/components/AuthRequiredPanel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,25 +21,30 @@ export default async function LiveRoomPage({ params }: PageProps) {
       }
     | undefined;
 
-  const roomUser = user?.id
-    ? {
-        id: user.id,
-        displayName: user.display_name ?? null,
-        name: user.name ?? null,
-        email: user.email ?? null,
-        isAdmin: user.is_admin ?? false,
-      }
-    : {
-        id: "guest",
-        displayName: "Guest",
-        name: "Guest",
-        email: null,
-        isAdmin: false,
-      };
+  if (!user?.id) {
+    return (
+      <div className="min-h-[100dvh] bg-[#07070b] text-white">
+        <AuthRequiredPanel
+          title="Sign in to join this room"
+          description="Live rooms are available after signing in."
+          callbackUrl={`/feature/live/room/${params.roomId}`}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="bg-[#07070b] min-h-[100dvh]">
-      <LiveVoiceRoom roomId={params.roomId} user={roomUser} />
+      <LiveVoiceRoom
+        roomId={params.roomId}
+        user={{
+          id: user.id,
+          displayName: user.display_name ?? null,
+          name: user.name ?? null,
+          email: user.email ?? null,
+          isAdmin: user.is_admin ?? false,
+        }}
+      />
     </div>
   );
 }
