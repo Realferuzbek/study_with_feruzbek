@@ -12,6 +12,49 @@ export function isTelegramInAppParam(value?: string | null): boolean {
   return (value ?? "").toLowerCase() === TELEGRAM_INAPP_VALUE;
 }
 
+export function isAndroidWebView(ua: string): boolean {
+  if (!ua) return false;
+  const u = ua.toLowerCase();
+  return (
+    u.includes("; wv") || (u.includes("version/4.0") && u.includes("chrome/"))
+  );
+}
+
+export function isKnownInAppBrowserUA(ua: string): boolean {
+  if (!ua) return false;
+  const u = ua.toLowerCase();
+  const tokens = [
+    "instagram",
+    "fbav",
+    "fban",
+    "fb_iab",
+    "messenger",
+    "line/",
+    "snapchat",
+    "tiktok",
+    "musical.ly",
+    "wv",
+    "webview",
+    "telegram",
+    "okhttp",
+  ];
+  return tokens.some((token) => u.includes(token));
+}
+
+export function isRealBrowserUA(ua: string): boolean {
+  if (!ua) return false;
+  const u = ua.toLowerCase();
+  const looksLikeBrowser =
+    u.includes("safari") ||
+    u.includes("chrome") ||
+    u.includes("crios") ||
+    u.includes("fxios") ||
+    u.includes("edg") ||
+    u.includes("brave");
+  if (isKnownInAppBrowserUA(ua) || isAndroidWebView(ua)) return false;
+  return looksLikeBrowser;
+}
+
 function isRelativePath(value: string): boolean {
   return value.startsWith("/") && !value.startsWith("//");
 }

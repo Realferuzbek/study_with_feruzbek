@@ -15,6 +15,9 @@ import {
 } from "./lib/blocked-user-guard";
 import { sanitizeCallbackPath } from "./lib/signin-messages";
 import {
+  isAndroidWebView,
+  isKnownInAppBrowserUA,
+  isRealBrowserUA,
   isTelegramInAppParam,
   stripTelegramInAppFromCallback,
 } from "./lib/inapp-browser";
@@ -102,7 +105,6 @@ const PUBLIC_API_BYPASS_PATHS = ["/api/leaderboard/ingest"];
 // treat common static assets as public
 const STATIC_EXT = /\.(?:png|svg|jpg|jpeg|gif|webp|ico|txt|xml|html)$/i;
 const REAL_BROWSER_COOKIE = "sm_real_browser";
-const MOBILE_UA_REGEX = /android|iphone|ipad|ipod/i;
 const CONTINUE_GATE_PREFIXES = ["/api/", "/_next/", "/continue"];
 const CONTINUE_GATE_EXACT_PATHS = new Set<string>([
   "/favicon.ico",
@@ -120,10 +122,6 @@ function isPublic(req: NextRequest) {
   if (STATIC_EXT.test(pathname)) return true;
   for (const p of PUBLIC_PATHS) if (pathname.startsWith(p)) return true;
   return false;
-}
-
-function isMobileUserAgent(ua: string): boolean {
-  return MOBILE_UA_REGEX.test(ua);
 }
 
 function shouldBypassContinueGate(pathname: string): boolean {
@@ -260,12 +258,14 @@ export async function middleware(req: NextRequest) {
     : baseSecurityContext;
 
   const ua = req.headers.get("user-agent") ?? "";
-  const isMobile = isMobileUserAgent(ua);
+  const inApp = isAndroidWebView(ua) || isKnownInAppBrowserUA(ua);
+  const realBrowser = isRealBrowserUA(ua);
   const confirmedBrowser =
     req.cookies.get(REAL_BROWSER_COOKIE)?.value === "1";
   const shouldGate =
-    (req.method === "GET" || req.method === "HEAD") &&
-    isMobile &&
+    req.method === "GET" &&
+    inApp &&
+    !realBrowser &&
     !confirmedBrowser &&
     !shouldBypassContinueGate(url.pathname);
   if (shouldGate) {
