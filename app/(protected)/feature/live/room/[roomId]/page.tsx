@@ -1,4 +1,3 @@
-import { redirect } from "next/navigation";
 import LiveVoiceRoom from "@/components/live/LiveVoiceRoom";
 import { getCachedSession } from "@/lib/server-session";
 
@@ -21,22 +20,25 @@ export default async function LiveRoomPage({ params }: PageProps) {
       }
     | undefined;
 
-  if (!user?.id) {
-    redirect("/signin");
-  }
+  const roomUser = user?.id
+    ? {
+        id: user.id,
+        displayName: user.display_name ?? null,
+        name: user.name ?? null,
+        email: user.email ?? null,
+        isAdmin: user.is_admin ?? false,
+      }
+    : {
+        id: "guest",
+        displayName: "Guest",
+        name: "Guest",
+        email: null,
+        isAdmin: false,
+      };
 
   return (
     <div className="bg-[#07070b] min-h-[100dvh]">
-      <LiveVoiceRoom
-        roomId={params.roomId}
-        user={{
-          id: user.id,
-          displayName: user.display_name ?? null,
-          name: user.name ?? null,
-          email: user.email ?? null,
-          isAdmin: user.is_admin ?? false,
-        }}
-      />
+      <LiveVoiceRoom roomId={params.roomId} user={roomUser} />
     </div>
   );
 }

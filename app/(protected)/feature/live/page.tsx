@@ -1,4 +1,3 @@
-import { redirect } from "next/navigation";
 import LiveRoomsLobby from "@/components/live/LiveRoomsLobby";
 import { getCachedSession } from "@/lib/server-session";
 
@@ -17,21 +16,25 @@ export default async function LiveRoomsFeature() {
       }
     | undefined;
 
-  if (!user?.id) {
-    redirect("/signin");
-  }
+  const lobbyUser = user?.id
+    ? {
+        id: user.id,
+        displayName: user.display_name ?? null,
+        name: user.name ?? null,
+        email: user.email ?? null,
+        isAdmin: user.is_admin ?? false,
+      }
+    : {
+        id: "guest",
+        displayName: "Guest",
+        name: "Guest",
+        email: null,
+        isAdmin: false,
+      };
 
   return (
     <div className="bg-[#07070b] min-h-[100dvh]">
-      <LiveRoomsLobby
-        user={{
-          id: user.id,
-          displayName: user.display_name ?? null,
-          name: user.name ?? null,
-          email: user.email ?? null,
-          isAdmin: user.is_admin ?? false,
-        }}
-      />
+      <LiveRoomsLobby user={lobbyUser} />
     </div>
   );
 }
