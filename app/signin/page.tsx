@@ -7,8 +7,15 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import SignInInteractive from "@/components/SignInInteractive";
+import ContinueInBrowserButton from "@/components/ContinueInBrowserButton";
 import { getCachedSession } from "@/lib/server-session";
-import { isTelegramInAppParam, isTelegramWebView } from "@/lib/inapp-browser";
+import {
+  isAndroidWebView,
+  isKnownInAppBrowserUA,
+  isRealBrowserUA,
+  isTelegramInAppParam,
+  stripTelegramInAppFromCallback,
+} from "@/lib/inapp-browser";
 import {
   sanitizeCallbackPath,
   SWITCH_ACCOUNT_DISABLED_NOTICE,
@@ -40,19 +47,60 @@ function isTelegramEntryParam(
   return isTelegramInAppParam(raw);
 }
 
+function buildSearchString(
+  searchParams?: Record<string, string | string[] | undefined>,
+) {
+  if (!searchParams) return "";
+  const params = new URLSearchParams();
+  Object.entries(searchParams).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value.forEach((entry) => {
+        if (typeof entry === "string") params.append(key, entry);
+      });
+    } else if (typeof value === "string") {
+      params.set(key, value);
+    }
+  });
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
 export default async function SignInPage({ searchParams }: SignInPageProps) {
   const hintId = "signin-hint";
   const session = await getCachedSession();
   const isSignedIn = !!session?.user;
   const switchRequested = isSwitchRequested(searchParams);
-  const isTelegram =
-    isTelegramWebView(headers().get("user-agent") ?? undefined) ||
-    isTelegramEntryParam(searchParams);
+  const ua = headers().get("user-agent") ?? "";
+  const inAppUa = isAndroidWebView(ua) || isKnownInAppBrowserUA(ua);
+  const realBrowser = isRealBrowserUA(ua);
+  const forcedInApp = isTelegramEntryParam(searchParams);
+  const shouldContinueGate = (inAppUa || forcedInApp) && !realBrowser;
   const callbackUrl =
     sanitizeCallbackPath(searchParams?.callbackUrl) ?? "/dashboard";
 
-  if (isSignedIn && !switchRequested && !isTelegram) {
+  if (isSignedIn && !switchRequested && !shouldContinueGate) {
     redirect(callbackUrl);
+  }
+
+  if (shouldContinueGate) {
+    const rawTarget = `/signin${buildSearchString(searchParams)}`;
+    const cleanedTarget = stripTelegramInAppFromCallback(rawTarget);
+    const targetPath = sanitizeCallbackPath(cleanedTarget) ?? "/signin";
+
+    return (
+      <div className="min-h-screen grid place-items-center bg-neutral-950 text-white">
+        <main
+          className="w-[520px] max-w-[92vw] rounded-3xl bg-neutral-900/70 px-8 pb-10 pt-9 shadow-[0_0_120px_40px_rgba(118,0,255,0.2)] backdrop-blur"
+          role="main"
+          aria-label="Continue in browser"
+        >
+          <ContinueInBrowserButton targetPath={targetPath} />
+          <p className="mt-4 text-center text-sm text-neutral-300">
+            Continue in your browser to sign in.
+          </p>
+        </main>
+      </div>
+    );
   }
 
   return (
@@ -60,30 +108,27 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
       <main
         className="w-[520px] max-w-[92vw] rounded-3xl bg-neutral-900/70 px-8 pb-10 pt-9 shadow-[0_0_120px_40px_rgba(118,0,255,0.2)] backdrop-blur"
         role="main"
-        aria-labelledby={isTelegram ? undefined : "signin-heading"}
-        aria-label={isTelegram ? "Sign in" : undefined}
+        aria-labelledby="signin-heading"
       >
-        {!isTelegram ? (
-          <div className="mb-8 flex flex-col items-center gap-4 text-center">
-            <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-purple-600/70 via-purple-500/70 to-fuchsia-500/80">
-              <Image
-                src="/logo.svg"
-                alt="logo"
-                width={28}
-                height={28}
-                priority
-              />
-            </div>
-            <h1
-              id="signin-heading"
-              className="text-2xl font-extrabold uppercase tracking-[0.22em]"
-            >
-              StudyMate
-            </h1>
+        <div className="mb-8 flex flex-col items-center gap-4 text-center">
+          <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-purple-600/70 via-purple-500/70 to-fuchsia-500/80">
+            <Image
+              src="/logo.svg"
+              alt="logo"
+              width={28}
+              height={28}
+              priority
+            />
           </div>
-        ) : null}
+          <h1
+            id="signin-heading"
+            className="text-2xl font-extrabold uppercase tracking-[0.22em]"
+          >
+            StudyMate
+          </h1>
+        </div>
 
-        {!isTelegram && switchRequested && isSignedIn ? (
+        {switchRequested && isSignedIn ? (
           <div className="mb-4 rounded-2xl border border-fuchsia-500/30 bg-fuchsia-500/10 px-4 py-3 text-sm text-fuchsia-50">
             <p className="font-semibold">
               {SWITCH_ACCOUNT_DISABLED_NOTICE.title}
@@ -94,13 +139,7 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
           </div>
         ) : null}
 
-        {isTelegram ? (
-          <SignInInteractive
-            defaultCallbackUrl="/dashboard"
-            hintId={hintId}
-            initialIsTelegramWebView={isTelegram}
-          />
-        ) : isSignedIn ? (
+        {isSignedIn ? (
           <div className="space-y-3 text-center">
             <Link
               href={callbackUrl}
@@ -125,18 +164,17 @@ export default async function SignInPage({ searchParams }: SignInPageProps) {
             <SignInInteractive
               defaultCallbackUrl="/dashboard"
               hintId={hintId}
-              initialIsTelegramWebView={isTelegram}
+              initialIsInAppBrowser={shouldContinueGate}
+              initialIsRealBrowser={realBrowser}
             />
           </Suspense>
         )}
 
-        {!isTelegram ? (
-          <p id={hintId} className="mt-4 text-center text-sm text-neutral-300">
-            {isSignedIn
-              ? "You're already signed in. Use the dashboard shortcut above or sign out to switch accounts."
-              : "Use Google, GitHub, or email and password to sign in. You'll be redirected back to your dashboard."}
-          </p>
-        ) : null}
+        <p id={hintId} className="mt-4 text-center text-sm text-neutral-300">
+          {isSignedIn
+            ? "You're already signed in. Use the dashboard shortcut above or sign out to switch accounts."
+            : "Use Google, GitHub, or email and password to sign in. You'll be redirected back to your dashboard."}
+        </p>
       </main>
     </div>
   );

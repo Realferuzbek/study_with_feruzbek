@@ -7,13 +7,18 @@ import { headers } from "next/headers";
 import { Suspense } from "react";
 import { getCachedSession } from "@/lib/server-session";
 import SignInInteractive from "@/components/SignInInteractive";
-import { isTelegramInAppParam, isTelegramWebView } from "@/lib/inapp-browser";
+import {
+  isAndroidWebView,
+  isKnownInAppBrowserUA,
+  isRealBrowserUA,
+  isTelegramInAppParam,
+} from "@/lib/inapp-browser";
 
 type HomePageProps = {
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
-function isTelegramEntryParam(
+function isInAppEntryParam(
   searchParams?: Record<string, string | string[] | undefined>,
 ) {
   if (!searchParams) return false;
@@ -28,9 +33,11 @@ export default async function Home({ searchParams }: HomePageProps) {
   const session = await getCachedSession();
   const hintId = "home-auth-hint";
   const isSignedIn = !!session?.user;
-  const isTelegram =
-    isTelegramWebView(headers().get("user-agent") ?? undefined) ||
-    isTelegramEntryParam(searchParams);
+  const ua = headers().get("user-agent") ?? "";
+  const inAppUa = isAndroidWebView(ua) || isKnownInAppBrowserUA(ua);
+  const realBrowser = isRealBrowserUA(ua);
+  const forcedInApp = isInAppEntryParam(searchParams);
+  const shouldContinueGate = (inAppUa || forcedInApp) && !realBrowser;
 
   return (
     <div className="flex min-h-[100dvh] flex-col items-center justify-center bg-[#07070b] px-6 text-white">
@@ -49,11 +56,12 @@ export default async function Home({ searchParams }: HomePageProps) {
         </p>
 
         <div className="mt-8 space-y-3">
-          {isTelegram ? (
+          {shouldContinueGate ? (
             <SignInInteractive
               defaultCallbackUrl="/dashboard"
               hintId={hintId}
-              initialIsTelegramWebView={isTelegram}
+              initialIsInAppBrowser={shouldContinueGate}
+              initialIsRealBrowser={realBrowser}
             />
           ) : isSignedIn ? (
             <a
@@ -72,11 +80,12 @@ export default async function Home({ searchParams }: HomePageProps) {
               <SignInInteractive
                 defaultCallbackUrl="/dashboard"
                 hintId={hintId}
-                initialIsTelegramWebView={isTelegram}
+                initialIsInAppBrowser={shouldContinueGate}
+                initialIsRealBrowser={realBrowser}
               />
             </Suspense>
           )}
-          {!isTelegram ? (
+          {!shouldContinueGate ? (
             <p id={hintId} className="text-sm text-zinc-400">
               {isSignedIn
                 ? "You're already signed in. Head straight to your dashboard."

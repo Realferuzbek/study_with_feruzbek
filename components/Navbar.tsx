@@ -3,6 +3,7 @@ import Image from "next/image";
 import Link from "next/link";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import AvatarMenu from "@/components/AvatarMenu";
+import AuthEntryButtons from "@/components/AuthEntryButtons";
 import type { LanguageOption, Locale } from "@/lib/i18n";
 
 type NavbarProps = {
@@ -10,6 +11,8 @@ type NavbarProps = {
   avatarUrl?: string | null;
   viewerName?: string | null;
   viewerEmail?: string | null;
+  isSignedIn?: boolean;
+  authCallbackUrl?: string;
   locale: Locale;
   translations: {
     reviewerPanel: string;
@@ -26,10 +29,16 @@ export default function Navbar({
   avatarUrl,
   viewerName,
   viewerEmail,
+  isSignedIn,
+  authCallbackUrl,
   locale,
   translations,
   languageOptions,
 }: NavbarProps) {
+  const signedIn =
+    isSignedIn ?? Boolean(viewerEmail || viewerName || avatarUrl);
+  const callbackUrl = authCallbackUrl ?? "/dashboard";
+
   return (
     <header className="w-full border-b border-white/10 bg-black/30 backdrop-blur-xl supports-[backdrop-filter]:bg-black/20">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 text-white">
@@ -54,14 +63,29 @@ export default function Navbar({
             label={translations.languageMenuLabel}
           />
 
-          <AvatarMenu
-            avatarUrl={avatarUrl}
-            name={viewerName}
-            email={viewerEmail}
-            switchAccountLabel={translations.switchAccount}
-            deleteAccountLabel={translations.deleteAccount}
-            deleteAccountConfirm={translations.deleteAccountConfirm}
-          />
+          {signedIn ? (
+            <AvatarMenu
+              avatarUrl={avatarUrl}
+              name={viewerName}
+              email={viewerEmail}
+              switchAccountLabel={translations.switchAccount}
+              deleteAccountLabel={translations.deleteAccount}
+              deleteAccountConfirm={translations.deleteAccountConfirm}
+            />
+          ) : (
+            <>
+              <AuthEntryButtons
+                callbackUrl={callbackUrl}
+                size="md"
+                className="hidden items-center gap-3 sm:flex"
+              />
+              <AuthEntryButtons
+                callbackUrl={callbackUrl}
+                size="sm"
+                className="flex items-center gap-2 sm:hidden"
+              />
+            </>
+          )}
         </nav>
       </div>
     </header>

@@ -1,21 +1,26 @@
 "use client";
 
 import { useCallback } from "react";
-import {
-  buildAndroidIntentUrl,
-  buildContinueConfirmUrl,
-} from "@/lib/inapp-browser";
+import { buildAndroidIntentUrl } from "@/lib/inapp-browser";
 
 type ContinueInBrowserButtonProps = {
-  callbackUrl: string;
+  targetPath: string;
 };
 
 export default function ContinueInBrowserButton({
-  callbackUrl,
+  targetPath,
 }: ContinueInBrowserButtonProps) {
   const handleClick = useCallback(() => {
     if (typeof window === "undefined") return;
-    const targetUrl = buildContinueConfirmUrl(window.location.href, callbackUrl);
+    const safePath =
+      targetPath.startsWith("/") && !targetPath.startsWith("//")
+        ? targetPath
+        : "/signin";
+    const absoluteUrl = new URL(safePath, window.location.origin);
+    if (!absoluteUrl.searchParams.has("src")) {
+      absoluteUrl.searchParams.set("src", "external");
+    }
+    const targetUrl = absoluteUrl.toString();
     const isAndroid = /android/i.test(navigator.userAgent ?? "");
 
     if (isAndroid) {
@@ -39,7 +44,7 @@ export default function ContinueInBrowserButton({
     }
 
     window.open(targetUrl, "_blank", "noopener,noreferrer");
-  }, [callbackUrl]);
+  }, [targetPath]);
 
   return (
     <button

@@ -1,4 +1,4 @@
-// app/(protected)/dashboard/page.tsx
+// app/dashboard/page.tsx
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -7,6 +7,7 @@ import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import dynamicImport from "next/dynamic";
 import AvatarBadge from "@/components/AvatarBadge";
+import AuthEntryButtons from "@/components/AuthEntryButtons";
 import {
   getLanguageOptions,
   getTranslations,
@@ -32,7 +33,8 @@ const SessionEmailBridge = dynamicImport(
 
 export default async function DashboardPage() {
   const session = await getCachedSession();
-  const user = session!.user as any;
+  const user = session?.user as any;
+  const isSignedIn = !!session?.user;
   const avatarSrc = user?.avatar_url ?? user?.image ?? null;
   const displayName = session?.user?.name ?? null;
 
@@ -126,40 +128,61 @@ export default async function DashboardPage() {
     <div className="min-h-[100dvh] bg-[#07070b]">
       <SessionEmailBridge email={user?.email ?? null} />
       <Navbar
-        isAdmin={!!user.is_admin}
+        isAdmin={!!user?.is_admin}
         avatarUrl={avatarSrc}
         viewerName={displayName}
         viewerEmail={user?.email ?? null}
+        isSignedIn={isSignedIn}
+        authCallbackUrl="/dashboard"
         locale={locale}
         translations={t.nav}
         languageOptions={languageOptions}
       />
 
       <main className="mx-auto max-w-6xl px-4 py-8 text-white">
-        <section className="mb-10 overflow-hidden rounded-[32px] border border-white/10 bg-gradient-to-br from-[#1f1f33] via-[#121225] to-[#0a0a14] p-6 shadow-[0_25px_70px_rgba(104,67,255,0.25)]">
-          <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-            <div className="flex items-center gap-4">
-              <AvatarBadge
-                avatarUrl={avatarSrc}
-                name={displayName}
-                email={user?.email ?? null}
-                size={64}
-                priority
-                alt="Dashboard avatar"
-              />
-              <div>
-                <p className="text-sm uppercase tracking-[0.35em] text-fuchsia-300/70">
-                  {t.dashboard.welcomeTag}
-                </p>
-                <h1 className="mt-1 text-2xl font-semibold">
-                  {session?.user?.name ?? t.dashboard.welcomeFallback}
-                </h1>
-                <p className="text-sm text-zinc-400">{user?.email}</p>
+        {isSignedIn ? (
+          <section className="mb-10 overflow-hidden rounded-[32px] border border-white/10 bg-gradient-to-br from-[#1f1f33] via-[#121225] to-[#0a0a14] p-6 shadow-[0_25px_70px_rgba(104,67,255,0.25)]">
+            <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+              <div className="flex items-center gap-4">
+                <AvatarBadge
+                  avatarUrl={avatarSrc}
+                  name={displayName}
+                  email={user?.email ?? null}
+                  size={64}
+                  priority
+                  alt="Dashboard avatar"
+                />
+                <div>
+                  <p className="text-sm uppercase tracking-[0.35em] text-fuchsia-300/70">
+                    {t.dashboard.welcomeTag}
+                  </p>
+                  <h1 className="mt-1 text-2xl font-semibold">
+                    {session?.user?.name ?? t.dashboard.welcomeFallback}
+                  </h1>
+                  <p className="text-sm text-zinc-400">{user?.email}</p>
+                </div>
               </div>
             </div>
-
-          </div>
-        </section>
+          </section>
+        ) : (
+          <section className="mb-10 overflow-hidden rounded-[32px] border border-white/10 bg-gradient-to-br from-[#1f1f33] via-[#121225] to-[#0a0a14] p-6 shadow-[0_25px_70px_rgba(104,67,255,0.25)]">
+            <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h1 className="text-3xl font-semibold">
+                  Welcome to StudyMate
+                </h1>
+                <p className="mt-2 text-sm text-zinc-300">
+                  Browse as guest. Sign in to personalize.
+                </p>
+              </div>
+              <AuthEntryButtons
+                callbackUrl="/dashboard"
+                size="md"
+                className="w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center"
+              />
+            </div>
+          </section>
+        )}
 
         <section className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((feature) => {
@@ -200,7 +223,7 @@ export default async function DashboardPage() {
           })}
         </section>
 
-        <UsageHeartbeat />
+        {isSignedIn ? <UsageHeartbeat /> : null}
       </main>
     </div>
   );

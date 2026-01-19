@@ -15,30 +15,29 @@ export function isTelegramInAppParam(value?: string | null): boolean {
 export function isAndroidWebView(ua: string): boolean {
   if (!ua) return false;
   const u = ua.toLowerCase();
-  return (
-    u.includes("; wv") || (u.includes("version/4.0") && u.includes("chrome/"))
-  );
+  return u.includes("; wv");
 }
 
 export function isKnownInAppBrowserUA(ua: string): boolean {
   if (!ua) return false;
   const u = ua.toLowerCase();
   const tokens = [
+    "telegram",
     "instagram",
     "fbav",
     "fban",
     "fb_iab",
     "messenger",
-    "line/",
+    "line",
     "snapchat",
     "tiktok",
-    "musical.ly",
-    "wv",
-    "webview",
-    "telegram",
     "okhttp",
   ];
   return tokens.some((token) => u.includes(token));
+}
+
+export function isInAppBrowserUA(ua: string): boolean {
+  return isAndroidWebView(ua) || isKnownInAppBrowserUA(ua);
 }
 
 export function isRealBrowserUA(ua: string): boolean {
@@ -51,7 +50,7 @@ export function isRealBrowserUA(ua: string): boolean {
     u.includes("fxios") ||
     u.includes("edg") ||
     u.includes("brave");
-  if (isKnownInAppBrowserUA(ua) || isAndroidWebView(ua)) return false;
+  if (isInAppBrowserUA(ua)) return false;
   return looksLikeBrowser;
 }
 

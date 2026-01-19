@@ -11,9 +11,10 @@ import {
 } from "@/lib/signin-messages";
 import {
   buildAndroidIntentUrl,
-  buildExternalSigninUrl,
+  isInAppBrowserUA,
+  isRealBrowserUA,
   isTelegramInAppParam,
-  isTelegramWebView,
+  stripTelegramInAppFromCallback,
 } from "@/lib/inapp-browser";
 
 const SWITCH_ACCOUNT_ENABLED =
@@ -33,7 +34,8 @@ type LastUsedAuth = "google" | "github" | "email";
 type SignInInteractiveProps = {
   defaultCallbackUrl: string;
   hintId: string;
-  initialIsTelegramWebView?: boolean;
+  initialIsInAppBrowser?: boolean;
+  initialIsRealBrowser?: boolean;
 };
 
 function isStrongPassword(password: string) {
@@ -48,7 +50,8 @@ function isStrongPassword(password: string) {
 export default function SignInInteractive({
   defaultCallbackUrl,
   hintId,
-  initialIsTelegramWebView,
+  initialIsInAppBrowser,
+  initialIsRealBrowser,
 }: SignInInteractiveProps) {
   const params = useSearchParams();
   const router = useRouter();
@@ -59,11 +62,15 @@ export default function SignInInteractive({
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
   const [openBlocked, setOpenBlocked] = useState(false);
   const [isAndroid, setIsAndroid] = useState(false);
-  const [detectedTelegramWebView, setDetectedTelegramWebView] = useState(
-    () => initialIsTelegramWebView ?? false,
+  const [detectedInAppBrowser, setDetectedInAppBrowser] = useState(
+    () => initialIsInAppBrowser ?? false,
+  );
+  const [detectedRealBrowser, setDetectedRealBrowser] = useState(
+    () => initialIsRealBrowser ?? false,
   );
   const [step, setStep] = useState<"auth" | "verify">("auth");
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const initialMode = params.get("mode") === "register" ? "register" : "login";
+  const [mode, setMode] = useState<"login" | "register">(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -84,8 +91,9 @@ export default function SignInInteractive({
 
   const switchRequested = params.get("switch") === "1";
   const switchMode = SWITCH_ACCOUNT_ENABLED && switchRequested;
-  const forcedTelegramEntry = isTelegramInAppParam(params.get("inapp"));
-  const telegramWebView = forcedTelegramEntry || detectedTelegramWebView;
+  const forcedInAppEntry = isTelegramInAppParam(params.get("inapp"));
+  const inAppBrowser = forcedInAppEntry || detectedInAppBrowser;
+  const gateAuthEntry = inAppBrowser && !detectedRealBrowser;
 
   const errorCode = params.get("error");
   const blockedValues = params.getAll("blocked");
@@ -126,13 +134,22 @@ export default function SignInInteractive({
     return sanitizeCallbackPath(callback) ?? defaultCallbackUrl;
   }, [params, defaultCallbackUrl]);
 
-  const srcFromTelegram = useMemo(() => {
+  const srcFromExternal = useMemo(() => {
     const values = params.getAll("src");
-    if (values.some((value) => value?.toLowerCase() === "telegram")) {
+    if (
+      values.some(
+        (value) =>
+          value?.toLowerCase() === "telegram" ||
+          value?.toLowerCase() === "external",
+      )
+    ) {
       return true;
     }
     const single = params.get("src");
-    return single?.toLowerCase() === "telegram";
+    return (
+      single?.toLowerCase() === "telegram" ||
+      single?.toLowerCase() === "external"
+    );
   }, [params]);
 
   const alertId = errorMessage ? "signin-error" : undefined;
@@ -174,7 +191,7 @@ export default function SignInInteractive({
   }, [callbackUrl, clearPendingVerification, router]);
 
   const handleGoogleClick = useCallback(() => {
-    if (redirectingProvider || formSubmitting || telegramWebView) return;
+    if (redirectingProvider || formSubmitting || gateAuthEntry) return;
     updateLastUsed("google");
     setRedirectingProvider("google");
     signIn(
@@ -189,12 +206,12 @@ export default function SignInInteractive({
     callbackUrl,
     formSubmitting,
     redirectingProvider,
-    telegramWebView,
+    gateAuthEntry,
     updateLastUsed,
   ]);
 
   const handleGitHubClick = useCallback(() => {
-    if (redirectingProvider || formSubmitting || telegramWebView) return;
+    if (redirectingProvider || formSubmitting || gateAuthEntry) return;
     updateLastUsed("github");
     setRedirectingProvider("github");
     signIn("github", { callbackUrl, redirect: true }).catch((error) => {
@@ -205,14 +222,14 @@ export default function SignInInteractive({
     callbackUrl,
     formSubmitting,
     redirectingProvider,
-    telegramWebView,
+    gateAuthEntry,
     updateLastUsed,
   ]);
 
   const handleCredentialsSubmit = useCallback(
     async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      if (formSubmitting || redirectingProvider || telegramWebView) return;
+      if (formSubmitting || redirectingProvider || gateAuthEntry) return;
       setFormError(null);
 
       const isRegister = mode === "register";
@@ -319,7 +336,7 @@ export default function SignInInteractive({
       password,
       redirectingProvider,
       router,
-      telegramWebView,
+      gateAuthEntry,
       updateLastUsed,
     ],
   );
@@ -453,10 +470,22 @@ export default function SignInInteractive({
   const handleExternalBrowserClick = useCallback(() => {
     if (typeof window === "undefined") return;
     const targetUrl =
-      externalUrl ?? buildExternalSigninUrl(window.location.href);
+      externalUrl ??
+      (() => {
+        try {
+          const url = new URL(window.location.href);
+          url.hash = "";
+          if (!url.searchParams.has("src")) {
+            url.searchParams.set("src", "external");
+          }
+          return url.toString();
+        } catch {
+          return window.location.href;
+        }
+      })();
     setFallbackUrl(targetUrl);
 
-    if (telegramWebView && isAndroid) {
+    if (gateAuthEntry && isAndroid) {
       const chromeIntentUrl = buildAndroidIntentUrl(targetUrl, {
         chromePackage: true,
       });
@@ -478,7 +507,7 @@ export default function SignInInteractive({
 
     const opened = window.open(targetUrl, "_blank", "noopener,noreferrer");
     setOpenBlocked(!opened);
-  }, [externalUrl, isAndroid, telegramWebView]);
+  }, [externalUrl, gateAuthEntry, isAndroid]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -513,7 +542,16 @@ export default function SignInInteractive({
   }, [resendCountdown]);
 
   useEffect(() => {
-    if (switchMode && !redirectingProvider && !telegramWebView && step === "auth") {
+    const nextMode = params.get("mode");
+    if (nextMode === "register") {
+      setMode("register");
+    } else if (nextMode === "login") {
+      setMode("login");
+    }
+  }, [params]);
+
+  useEffect(() => {
+    if (switchMode && !redirectingProvider && !gateAuthEntry && step === "auth") {
       handleGoogleClick();
     }
   }, [
@@ -521,20 +559,28 @@ export default function SignInInteractive({
     redirectingProvider,
     step,
     switchMode,
-    telegramWebView,
+    gateAuthEntry,
   ]);
 
   useEffect(() => {
     if (typeof navigator === "undefined") return;
-    setDetectedTelegramWebView(
-      (prev) => prev || isTelegramWebView(navigator.userAgent),
-    );
-    setIsAndroid(/android/i.test(navigator.userAgent));
+    const ua = navigator.userAgent ?? "";
+    setDetectedInAppBrowser((prev) => prev || isInAppBrowserUA(ua));
+    setDetectedRealBrowser(isRealBrowserUA(ua));
+    setIsAndroid(/android/i.test(ua));
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    setExternalUrl(buildExternalSigninUrl(window.location.href));
+    const query = params.toString();
+    const rawPath = `/signin${query ? `?${query}` : ""}`;
+    const cleanedPath = stripTelegramInAppFromCallback(rawPath);
+    const safePath = sanitizeCallbackPath(cleanedPath) ?? "/signin";
+    const url = new URL(safePath, window.location.origin);
+    if (!url.searchParams.has("src")) {
+      url.searchParams.set("src", "external");
+    }
+    setExternalUrl(url.toString());
   }, [params]);
 
   useEffect(() => {
@@ -577,22 +623,22 @@ export default function SignInInteractive({
       </span>
     ) : null;
 
-  const telegramHelperId = "signin-telegram-helper";
+  const inAppHelperId = "signin-inapp-helper";
 
-  if (telegramWebView) {
+  if (gateAuthEntry) {
     return (
       <div className="space-y-3">
         <button
           type="button"
           onClick={handleExternalBrowserClick}
-          aria-describedby={telegramHelperId}
+          aria-describedby={inAppHelperId}
           className="relative inline-flex h-12 min-h-[48px] w-full items-center justify-center rounded-2xl bg-[linear-gradient(120deg,#7c3aed,#8b5cf6,#a855f7,#ec4899)] px-6 text-sm font-semibold text-white shadow-[0_20px_40px_rgba(123,58,237,0.35)] transition-transform duration-200 hover:scale-[1.01] focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
         >
-          Continue on Website
+          Continue in Browser
         </button>
-        <p id={telegramHelperId} className="text-sm text-neutral-300">
-          Telegram&apos;s in-app browser may ask for email again. Continue on
-          website for quickest sign-in.
+        <p id={inAppHelperId} className="text-sm text-neutral-300">
+          In-app browsers can interrupt sign-in. Continue in your browser for
+          the smoothest experience.
         </p>
         {openBlocked && fallbackUrl ? (
           <p className="text-sm text-neutral-400">
@@ -673,7 +719,7 @@ export default function SignInInteractive({
         </div>
       ) : null}
 
-      {srcFromTelegram ? (
+      {srcFromExternal ? (
         <p className="mb-3 text-sm text-emerald-200">
           You&apos;re in browser ✅
         </p>
