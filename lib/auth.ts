@@ -27,10 +27,10 @@ const SESSION_COOKIE_SECURE =
 
 const USER_PROFILE_COLUMNS =
   "id,is_admin,is_dm_admin,avatar_url,name,display_name,is_blocked";
-const CREDENTIALS_COLUMNS = `${USER_PROFILE_COLUMNS},email,password_hash`;
+const CREDENTIALS_COLUMNS = `${USER_PROFILE_COLUMNS},email,password_hash,email_verified_at`;
 
 const PROFILE_REFRESH_INTERVAL_MS = 60_000; // refresh Supabase profile at most once per minute.
-const MIN_PASSWORD_LENGTH = 8;
+const MIN_PASSWORD_LENGTH = 6;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type UserProfileRecord = {
@@ -153,6 +153,9 @@ export const authOptions: NextAuthOptions = {
 
           const valid = await bcrypt.compare(password, data.password_hash);
           if (!valid) return null;
+          if (!data.email_verified_at) {
+            throw new Error("EmailNotVerified");
+          }
 
           return {
             id: data.id,

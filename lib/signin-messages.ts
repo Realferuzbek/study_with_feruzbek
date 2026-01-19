@@ -39,6 +39,10 @@ const MESSAGE_MAP: Record<string, SignInErrorMessage> = {
     title: "Invalid credentials",
     description: "Check your email and password, then try again.",
   },
+  EmailNotVerified: {
+    title: "Email not verified",
+    description: "Please verify your email first, then sign in again.",
+  },
   AccessDenied: {
     title: "Access denied",
     description:

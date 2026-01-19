@@ -19,8 +19,14 @@ import {
 const SWITCH_ACCOUNT_ENABLED =
   process.env.NEXT_PUBLIC_ENABLE_SWITCH_ACCOUNT === "1";
 const LAST_USED_KEY = "last_used_auth";
-const MIN_PASSWORD_LENGTH = 8;
+const MIN_PASSWORD_LENGTH = 6;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PASSWORD_RULES_ERROR =
+  "Password must include at least 6 characters, one uppercase letter, one lowercase letter, and one number.";
+const VERIFICATION_CODE_LENGTH = 6;
+const VERIFICATION_CODE_REGEX = /^\d{6}$/;
+const RESEND_COOLDOWN_SECONDS = 60;
+const PENDING_VERIFICATION_EMAIL_KEY = "pending_verification_email";
 
 type LastUsedAuth = "google" | "github" | "email";
 
@@ -29,6 +35,15 @@ type SignInInteractiveProps = {
   hintId: string;
   initialIsTelegramWebView?: boolean;
 };
+
+function isStrongPassword(password: string) {
+  return (
+    password.length >= MIN_PASSWORD_LENGTH &&
+    /[A-Z]/.test(password) &&
+    /[a-z]/.test(password) &&
+    /\d/.test(password)
+  );
+}
 
 export default function SignInInteractive({
   defaultCallbackUrl,
@@ -47,10 +62,22 @@ export default function SignInInteractive({
   const [detectedTelegramWebView, setDetectedTelegramWebView] = useState(
     () => initialIsTelegramWebView ?? false,
   );
+  const [step, setStep] = useState<"auth" | "verify">("auth");
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [verificationError, setVerificationError] = useState<string | null>(
+    null,
+  );
+  const [verificationNotice, setVerificationNotice] = useState<string | null>(
+    null,
+  );
+  const [verificationSubmitting, setVerificationSubmitting] = useState(false);
+  const [resendSubmitting, setResendSubmitting] = useState(false);
+  const [resendCountdown, setResendCountdown] = useState(0);
   const [formError, setFormError] = useState<string | null>(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [lastUsedAuth, setLastUsedAuth] = useState<LastUsedAuth | null>(null);
@@ -64,6 +91,10 @@ export default function SignInInteractive({
   const blockedValues = params.getAll("blocked");
   const blockedParam =
     blockedValues.find((value) => value != null) ?? params.get("blocked");
+  const verifiedValues = params.getAll("verified");
+  const verifiedParam =
+    verifiedValues.find((value) => value != null) ?? params.get("verified");
+  const verifiedNotice = verifiedParam === "1";
 
   const errorMessage = useMemo(
     () => resolveSignInError(errorCode ?? undefined),
@@ -79,6 +110,13 @@ export default function SignInInteractive({
         }
       : null;
   }, [blockedParam]);
+  const verifiedMessage = useMemo(() => {
+    if (!verifiedNotice) return null;
+    return {
+      title: "Email verified",
+      description: "Sign in to continue.",
+    };
+  }, [verifiedNotice]);
 
   const callbackUrl = useMemo(() => {
     const callbackCandidates = params.getAll("callbackUrl");
@@ -100,9 +138,10 @@ export default function SignInInteractive({
   const alertId = errorMessage ? "signin-error" : undefined;
   const blockedAlertId = blockedMessage ? "signin-blocked" : undefined;
   const switchAlertId = !switchMode && switchRequested ? "signin-switch" : undefined;
+  const verifiedAlertId = verifiedMessage ? "signin-verified" : undefined;
   const formAlertId = formError ? "signin-form-error" : undefined;
   const describedBy =
-    [hintId, alertId, blockedAlertId, switchAlertId, formAlertId]
+    [hintId, alertId, blockedAlertId, switchAlertId, verifiedAlertId, formAlertId]
       .filter(Boolean)
       .join(" ") || undefined;
 
@@ -112,6 +151,27 @@ export default function SignInInteractive({
     }
     setLastUsedAuth(value);
   }, []);
+
+  const clearPendingVerification = useCallback(() => {
+    setPendingEmail(null);
+    setStep("auth");
+    setVerificationCode("");
+    setVerificationError(null);
+    setVerificationNotice(null);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(PENDING_VERIFICATION_EMAIL_KEY);
+    }
+  }, []);
+
+  const redirectToManualSignIn = useCallback(() => {
+    clearPendingVerification();
+    const nextParams = new URLSearchParams();
+    nextParams.set("verified", "1");
+    if (callbackUrl) {
+      nextParams.set("callbackUrl", callbackUrl);
+    }
+    router.replace(`/signin?${nextParams.toString()}`);
+  }, [callbackUrl, clearPendingVerification, router]);
 
   const handleGoogleClick = useCallback(() => {
     if (redirectingProvider || formSubmitting || telegramWebView) return;
@@ -166,6 +226,10 @@ export default function SignInInteractive({
         );
         return;
       }
+      if (mode === "register" && !isStrongPassword(password)) {
+        setFormError(PASSWORD_RULES_ERROR);
+        return;
+      }
       if (mode === "register" && password !== confirmPassword) {
         setFormError("Passwords do not match.");
         return;
@@ -185,8 +249,9 @@ export default function SignInInteractive({
             }),
           });
 
+          const data = await response.json().catch(() => null);
+
           if (!response.ok) {
-            const data = await response.json().catch(() => null);
             const message =
               typeof data?.error === "string"
                 ? data.error
@@ -194,6 +259,28 @@ export default function SignInInteractive({
             setFormError(message);
             return;
           }
+
+          if (data?.needsVerification) {
+            const verifiedEmail =
+              typeof data?.email === "string" ? data.email : trimmedEmail;
+            setPendingEmail(verifiedEmail);
+            setStep("verify");
+            setVerificationCode("");
+            setVerificationError(null);
+            setVerificationNotice(null);
+            setResendCountdown(RESEND_COOLDOWN_SECONDS);
+            setConfirmPassword("");
+            if (typeof window !== "undefined") {
+              window.sessionStorage.setItem(
+                PENDING_VERIFICATION_EMAIL_KEY,
+                verifiedEmail,
+              );
+            }
+            return;
+          }
+
+          setFormError("Unable to start email verification.");
+          return;
         }
 
         const result = await signIn("credentials", {
@@ -206,6 +293,11 @@ export default function SignInInteractive({
         if (result?.ok) {
           updateLastUsed("email");
           router.push(result.url ?? callbackUrl);
+          return;
+        }
+
+        if (result?.error === "EmailNotVerified") {
+          setFormError("Please verify your email first.");
           return;
         }
 
@@ -239,6 +331,132 @@ export default function SignInInteractive({
     ],
   );
 
+  const handleVerifySubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (verificationSubmitting || resendSubmitting) return;
+      setVerificationError(null);
+      setVerificationNotice(null);
+
+      if (!pendingEmail) {
+        redirectToManualSignIn();
+        return;
+      }
+
+      const trimmedCode = verificationCode.trim();
+      if (!VERIFICATION_CODE_REGEX.test(trimmedCode)) {
+        setVerificationError(
+          `Enter the ${VERIFICATION_CODE_LENGTH}-digit code.`,
+        );
+        return;
+      }
+
+      setVerificationSubmitting(true);
+
+      try {
+        const response = await csrfFetch("/api/auth/verify-email-code", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: pendingEmail,
+            code: trimmedCode,
+          }),
+        });
+
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          const message =
+            typeof data?.error === "string" ? data.error : "Incorrect code";
+          setVerificationError(message);
+          if (response.status === 429) {
+            setResendCountdown(0);
+          }
+          return;
+        }
+
+        if (!password) {
+          redirectToManualSignIn();
+          return;
+        }
+
+        const result = await signIn("credentials", {
+          redirect: false,
+          email: pendingEmail,
+          password,
+          callbackUrl,
+        });
+
+        if (result?.ok) {
+          clearPendingVerification();
+          updateLastUsed("email");
+          router.push(result.url ?? callbackUrl);
+          return;
+        }
+
+        if (result?.error === "EmailNotVerified") {
+          setVerificationError("Please verify your email first.");
+          return;
+        }
+
+        redirectToManualSignIn();
+      } catch (error) {
+        console.error("[signin] verify email failed", error);
+        setVerificationError("Unable to verify code. Please try again.");
+      } finally {
+        setVerificationSubmitting(false);
+      }
+    },
+    [
+      callbackUrl,
+      clearPendingVerification,
+      password,
+      pendingEmail,
+      redirectToManualSignIn,
+      resendSubmitting,
+      router,
+      updateLastUsed,
+      verificationCode,
+      verificationSubmitting,
+    ],
+  );
+
+  const handleResendCode = useCallback(async () => {
+    if (
+      !pendingEmail ||
+      resendSubmitting ||
+      verificationSubmitting ||
+      resendCountdown > 0
+    ) {
+      return;
+    }
+
+    setVerificationError(null);
+    setVerificationNotice(null);
+    setResendSubmitting(true);
+
+    try {
+      await csrfFetch("/api/auth/resend-verification-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: pendingEmail }),
+      });
+      setVerificationNotice("We sent a new verification code.");
+      setResendCountdown(RESEND_COOLDOWN_SECONDS);
+    } catch (error) {
+      console.error("[signin] resend verification failed", error);
+      setVerificationNotice("If the email exists, we sent a code.");
+      setResendCountdown(RESEND_COOLDOWN_SECONDS);
+    } finally {
+      setResendSubmitting(false);
+    }
+  }, [
+    pendingEmail,
+    resendCountdown,
+    resendSubmitting,
+    verificationSubmitting,
+  ]);
+
   const handleExternalBrowserClick = useCallback(() => {
     if (typeof window === "undefined") return;
     const targetUrl =
@@ -270,10 +488,48 @@ export default function SignInInteractive({
   }, [externalUrl, isAndroid, telegramWebView]);
 
   useEffect(() => {
-    if (switchMode && !redirectingProvider && !telegramWebView) {
+    if (typeof window === "undefined") return;
+    const storedEmail = window.sessionStorage.getItem(
+      PENDING_VERIFICATION_EMAIL_KEY,
+    );
+    if (storedEmail && EMAIL_REGEX.test(storedEmail)) {
+      setPendingEmail(storedEmail);
+      setStep("verify");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!verifiedNotice) return;
+    setStep("auth");
+    setMode("login");
+    setPendingEmail(null);
+    setVerificationCode("");
+    setVerificationError(null);
+    setVerificationNotice(null);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(PENDING_VERIFICATION_EMAIL_KEY);
+    }
+  }, [verifiedNotice]);
+
+  useEffect(() => {
+    if (resendCountdown <= 0) return;
+    const timer = window.setTimeout(() => {
+      setResendCountdown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [resendCountdown]);
+
+  useEffect(() => {
+    if (switchMode && !redirectingProvider && !telegramWebView && step === "auth") {
       handleGoogleClick();
     }
-  }, [handleGoogleClick, redirectingProvider, switchMode, telegramWebView]);
+  }, [
+    handleGoogleClick,
+    redirectingProvider,
+    step,
+    switchMode,
+    telegramWebView,
+  ]);
 
   useEffect(() => {
     if (typeof navigator === "undefined") return;
@@ -310,6 +566,16 @@ export default function SignInInteractive({
   const toggleLabel =
     mode === "login" ? "Don't have an account?" : "Already have an account?";
   const toggleAction = mode === "login" ? "Register here" : "Sign in";
+  const isVerifying = step === "verify" && !!pendingEmail;
+  const verificationAlertId = verificationError ? "verify-error" : undefined;
+  const verificationNoticeId = verificationNotice ? "verify-notice" : undefined;
+  const verificationDescribedBy =
+    [verificationAlertId, verificationNoticeId].filter(Boolean).join(" ") ||
+    undefined;
+  const resendLabel =
+    resendCountdown > 0
+      ? `Resend code (${resendCountdown}s)`
+      : "Resend code";
 
   const renderLastUsedBadge = (value: LastUsedAuth) =>
     lastUsedAuth === value ? (
@@ -384,6 +650,20 @@ export default function SignInInteractive({
         </div>
       ) : null}
 
+      {verifiedMessage ? (
+        <div
+          id={verifiedAlertId}
+          role="status"
+          aria-live="polite"
+          className="mb-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-50"
+        >
+          <p className="font-semibold">{verifiedMessage.title}</p>
+          <p className="mt-1 text-emerald-100/80">
+            {verifiedMessage.description}
+          </p>
+        </div>
+      ) : null}
+
       {!switchMode && switchRequested ? (
         <div
           id={switchAlertId}
@@ -406,154 +686,259 @@ export default function SignInInteractive({
         </p>
       ) : null}
 
-      <form
-        onSubmit={handleCredentialsSubmit}
-        aria-describedby={describedBy}
-        className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-4"
-      >
-        <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold text-neutral-200">
-            Email and password
+      {isVerifying ? (
+        <form
+          onSubmit={handleVerifySubmit}
+          aria-describedby={verificationDescribedBy}
+          className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-4"
+        >
+          <div className="space-y-1">
+            <p className="text-sm font-semibold text-neutral-200">
+              Confirm your email
+            </p>
+            <p className="text-sm text-neutral-400">
+              We sent a 6-digit code to{" "}
+              <span className="font-semibold text-white">
+                {pendingEmail ?? ""}
+              </span>
+              .
+            </p>
+          </div>
+
+          <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">
+            Verification code
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              autoComplete="one-time-code"
+              maxLength={VERIFICATION_CODE_LENGTH}
+              value={verificationCode}
+              onChange={(event) => {
+                const digits = event.target.value
+                  .replace(/\D/g, "")
+                  .slice(0, VERIFICATION_CODE_LENGTH);
+                setVerificationCode(digits);
+                if (verificationError) setVerificationError(null);
+              }}
+              disabled={verificationSubmitting}
+              className="h-12 w-full rounded-2xl border border-white/10 bg-neutral-950/40 px-4 text-center text-lg font-semibold tracking-[0.4em] text-white placeholder:text-neutral-500 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition focus:border-fuchsia-400/60 focus:outline-none focus:ring-2 focus:ring-fuchsia-400/30"
+              placeholder="000000"
+              required
+            />
+          </label>
+
+          {verificationNotice ? (
+            <div
+              id={verificationNoticeId}
+              role="status"
+              aria-live="polite"
+              className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-50"
+            >
+              {verificationNotice}
+            </div>
+          ) : null}
+
+          {verificationError ? (
+            <div
+              id={verificationAlertId}
+              role="alert"
+              aria-live="polite"
+              className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100"
+            >
+              {verificationError}
+            </div>
+          ) : null}
+
+          <button
+            type="submit"
+            disabled={
+              verificationSubmitting ||
+              resendSubmitting ||
+              verificationCode.length !== VERIFICATION_CODE_LENGTH
+            }
+            aria-busy={verificationSubmitting}
+            className="relative inline-flex h-12 min-h-[48px] w-full items-center justify-center rounded-2xl bg-[linear-gradient(120deg,#7c3aed,#8b5cf6,#a855f7,#ec4899)] px-6 text-sm font-semibold text-white shadow-[0_20px_40px_rgba(123,58,237,0.35)] transition-transform duration-200 hover:scale-[1.01] focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-75"
+          >
+            {verificationSubmitting ? "Verifying..." : "Verify email"}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleResendCode}
+            disabled={
+              resendSubmitting || verificationSubmitting || resendCountdown > 0
+            }
+            aria-busy={resendSubmitting}
+            className="inline-flex h-11 min-h-[44px] w-full items-center justify-center rounded-2xl border border-white/10 bg-neutral-950/40 px-6 text-sm font-semibold text-white transition hover:border-white/25 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {resendSubmitting ? "Sending..." : resendLabel}
+          </button>
+
+          <p className="text-center text-xs text-neutral-400">
+            {password
+              ? "We'll sign you in automatically after verification."
+              : "After verifying, please sign in again to continue."}
           </p>
-          {renderLastUsedBadge("email")}
-        </div>
+        </form>
+      ) : (
+        <form
+          onSubmit={handleCredentialsSubmit}
+          aria-describedby={describedBy}
+          className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-4"
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-neutral-200">
+              Email and password
+            </p>
+            {renderLastUsedBadge("email")}
+          </div>
 
-        <div className="space-y-3">
-          <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">
-            Email
-            <input
-              type="email"
-              name="email"
-              autoComplete="email"
-              value={email}
-              onChange={(event) => {
-                setEmail(event.target.value);
-                if (formError) setFormError(null);
-              }}
-              disabled={formSubmitting}
-              className="h-12 w-full rounded-2xl border border-white/10 bg-neutral-950/40 px-4 text-sm font-medium normal-case text-white placeholder:text-neutral-500 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition focus:border-fuchsia-400/60 focus:outline-none focus:ring-2 focus:ring-fuchsia-400/30"
-              placeholder="you@example.com"
-              required
-            />
-          </label>
-
-          <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">
-            Password
-            <input
-              type="password"
-              name="password"
-              autoComplete={mode === "register" ? "new-password" : "current-password"}
-              value={password}
-              onChange={(event) => {
-                setPassword(event.target.value);
-                if (formError) setFormError(null);
-              }}
-              disabled={formSubmitting}
-              className="h-12 w-full rounded-2xl border border-white/10 bg-neutral-950/40 px-4 text-sm font-medium normal-case text-white placeholder:text-neutral-500 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition focus:border-fuchsia-400/60 focus:outline-none focus:ring-2 focus:ring-fuchsia-400/30"
-              placeholder={
-                mode === "register" ? "Create a password" : "Enter your password"
-              }
-              required
-            />
-          </label>
-
-          {mode === "register" ? (
+          <div className="space-y-3">
             <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">
-              Confirm password
+              Email
               <input
-                type="password"
-                name="confirmPassword"
-                autoComplete="new-password"
-                value={confirmPassword}
+                type="email"
+                name="email"
+                autoComplete="email"
+                value={email}
                 onChange={(event) => {
-                  setConfirmPassword(event.target.value);
+                  setEmail(event.target.value);
                   if (formError) setFormError(null);
                 }}
                 disabled={formSubmitting}
                 className="h-12 w-full rounded-2xl border border-white/10 bg-neutral-950/40 px-4 text-sm font-medium normal-case text-white placeholder:text-neutral-500 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition focus:border-fuchsia-400/60 focus:outline-none focus:ring-2 focus:ring-fuchsia-400/30"
-                placeholder="Repeat your password"
+                placeholder="you@example.com"
                 required
               />
             </label>
-          ) : null}
-        </div>
 
-        {formError ? (
-          <div
-            id={formAlertId}
-            role="alert"
-            aria-live="polite"
-            className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100"
-          >
-            {formError}
+            <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">
+              Password
+              <input
+                type="password"
+                name="password"
+                autoComplete={mode === "register" ? "new-password" : "current-password"}
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  if (formError) setFormError(null);
+                }}
+                disabled={formSubmitting}
+                className="h-12 w-full rounded-2xl border border-white/10 bg-neutral-950/40 px-4 text-sm font-medium normal-case text-white placeholder:text-neutral-500 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition focus:border-fuchsia-400/60 focus:outline-none focus:ring-2 focus:ring-fuchsia-400/30"
+                placeholder={
+                  mode === "register"
+                    ? "Create a password"
+                    : "Enter your password"
+                }
+                required
+              />
+            </label>
+
+            {mode === "register" ? (
+              <label className="grid gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">
+                Confirm password
+                <input
+                  type="password"
+                  name="confirmPassword"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(event) => {
+                    setConfirmPassword(event.target.value);
+                    if (formError) setFormError(null);
+                  }}
+                  disabled={formSubmitting}
+                  className="h-12 w-full rounded-2xl border border-white/10 bg-neutral-950/40 px-4 text-sm font-medium normal-case text-white placeholder:text-neutral-500 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition focus:border-fuchsia-400/60 focus:outline-none focus:ring-2 focus:ring-fuchsia-400/30"
+                  placeholder="Repeat your password"
+                  required
+                />
+              </label>
+            ) : null}
           </div>
-        ) : null}
 
-        <button
-          type="submit"
-          disabled={formSubmitting || !!redirectingProvider}
-          aria-busy={formSubmitting}
-          className="relative inline-flex h-12 min-h-[48px] w-full items-center justify-center rounded-2xl bg-[linear-gradient(120deg,#7c3aed,#8b5cf6,#a855f7,#ec4899)] px-6 text-sm font-semibold text-white shadow-[0_20px_40px_rgba(123,58,237,0.35)] transition-transform duration-200 hover:scale-[1.01] focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-75"
-        >
-          {formSubmitting ? "Working..." : submitLabel}
-        </button>
+          {formError ? (
+            <div
+              id={formAlertId}
+              role="alert"
+              aria-live="polite"
+              className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100"
+            >
+              {formError}
+            </div>
+          ) : null}
 
-        <p className="text-center text-sm text-neutral-300">
-          {toggleLabel}{" "}
           <button
-            type="button"
-            onClick={() => {
-              setFormError(null);
-              setConfirmPassword("");
-              setMode((prev) => (prev === "login" ? "register" : "login"));
-            }}
-            className="font-semibold text-white underline decoration-white/60 underline-offset-4 transition hover:text-white/90"
+            type="submit"
+            disabled={formSubmitting || !!redirectingProvider}
+            aria-busy={formSubmitting}
+            className="relative inline-flex h-12 min-h-[48px] w-full items-center justify-center rounded-2xl bg-[linear-gradient(120deg,#7c3aed,#8b5cf6,#a855f7,#ec4899)] px-6 text-sm font-semibold text-white shadow-[0_20px_40px_rgba(123,58,237,0.35)] transition-transform duration-200 hover:scale-[1.01] focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-75"
           >
-            {toggleAction}
+            {formSubmitting ? "Working..." : submitLabel}
           </button>
-        </p>
-      </form>
 
-      <div className="my-6 flex items-center gap-3">
-        <span className="h-px flex-1 bg-white/10" />
-        <span className="text-[11px] font-semibold uppercase tracking-[0.3em] text-neutral-400">
-          or continue with
-        </span>
-        <span className="h-px flex-1 bg-white/10" />
-      </div>
+          <p className="text-center text-sm text-neutral-300">
+            {toggleLabel}{" "}
+            <button
+              type="button"
+              onClick={() => {
+                setFormError(null);
+                setConfirmPassword("");
+                setMode((prev) => (prev === "login" ? "register" : "login"));
+              }}
+              className="font-semibold text-white underline decoration-white/60 underline-offset-4 transition hover:text-white/90"
+            >
+              {toggleAction}
+            </button>
+          </p>
+        </form>
+      )}
 
-      <div className="space-y-3">
-        <button
-          type="button"
-          onClick={handleGoogleClick}
-          disabled={!!redirectingProvider || formSubmitting}
-          aria-busy={googleBusy}
-          aria-describedby={describedBy}
-          className="relative inline-flex h-12 min-h-[48px] w-full items-center justify-center rounded-2xl border border-white/10 bg-neutral-950/40 px-6 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(0,0,0,0.35)] transition hover:border-white/25 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-70"
-        >
-          <span role="status" aria-live="polite" className="sr-only">
-            {googleBusy ? srStatus : ""}
-          </span>
-          <span className="flex w-full items-center justify-between gap-3">
-            <span>{googleBusy ? redirectLabel : idleLabel}</span>
-            {renderLastUsedBadge("google")}
-          </span>
-        </button>
+      {!isVerifying ? (
+        <>
+          <div className="my-6 flex items-center gap-3">
+            <span className="h-px flex-1 bg-white/10" />
+            <span className="text-[11px] font-semibold uppercase tracking-[0.3em] text-neutral-400">
+              or continue with
+            </span>
+            <span className="h-px flex-1 bg-white/10" />
+          </div>
 
-        <button
-          type="button"
-          onClick={handleGitHubClick}
-          disabled={!!redirectingProvider || formSubmitting}
-          aria-busy={githubBusy}
-          aria-describedby={describedBy}
-          className="relative inline-flex h-12 min-h-[48px] w-full items-center justify-center rounded-2xl border border-white/10 bg-neutral-950/40 px-6 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(0,0,0,0.35)] transition hover:border-white/25 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-70"
-        >
-          <span className="flex w-full items-center justify-between gap-3">
-            <span>{githubBusy ? "Redirecting..." : "Continue with GitHub"}</span>
-            {renderLastUsedBadge("github")}
-          </span>
-        </button>
-      </div>
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={handleGoogleClick}
+              disabled={!!redirectingProvider || formSubmitting}
+              aria-busy={googleBusy}
+              aria-describedby={describedBy}
+              className="relative inline-flex h-12 min-h-[48px] w-full items-center justify-center rounded-2xl border border-white/10 bg-neutral-950/40 px-6 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(0,0,0,0.35)] transition hover:border-white/25 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <span role="status" aria-live="polite" className="sr-only">
+                {googleBusy ? srStatus : ""}
+              </span>
+              <span className="flex w-full items-center justify-between gap-3">
+                <span>{googleBusy ? redirectLabel : idleLabel}</span>
+                {renderLastUsedBadge("google")}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleGitHubClick}
+              disabled={!!redirectingProvider || formSubmitting}
+              aria-busy={githubBusy}
+              aria-describedby={describedBy}
+              className="relative inline-flex h-12 min-h-[48px] w-full items-center justify-center rounded-2xl border border-white/10 bg-neutral-950/40 px-6 text-sm font-semibold text-white shadow-[0_14px_30px_rgba(0,0,0,0.35)] transition hover:border-white/25 hover:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              <span className="flex w-full items-center justify-between gap-3">
+                <span>
+                  {githubBusy ? "Redirecting..." : "Continue with GitHub"}
+                </span>
+                {renderLastUsedBadge("github")}
+              </span>
+            </button>
+          </div>
+        </>
+      ) : null}
     </>
   );
 }
