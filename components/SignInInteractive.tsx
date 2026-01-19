@@ -215,6 +215,7 @@ export default function SignInInteractive({
       if (formSubmitting || redirectingProvider || telegramWebView) return;
       setFormError(null);
 
+      const isRegister = mode === "register";
       const trimmedEmail = email.trim().toLowerCase();
       if (!trimmedEmail || !EMAIL_REGEX.test(trimmedEmail)) {
         setFormError("Enter a valid email.");
@@ -226,11 +227,11 @@ export default function SignInInteractive({
         );
         return;
       }
-      if (mode === "register" && !isStrongPassword(password)) {
+      if (isRegister && !isStrongPassword(password)) {
         setFormError(PASSWORD_RULES_ERROR);
         return;
       }
-      if (mode === "register" && password !== confirmPassword) {
+      if (isRegister && password !== confirmPassword) {
         setFormError("Passwords do not match.");
         return;
       }
@@ -238,7 +239,7 @@ export default function SignInInteractive({
       setFormSubmitting(true);
 
       try {
-        if (mode === "register") {
+        if (isRegister) {
           const response = await csrfFetch("/api/auth/register", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -301,18 +302,10 @@ export default function SignInInteractive({
           return;
         }
 
-        setFormError(
-          mode === "register"
-            ? "Unable to sign in after registration."
-            : "Invalid credentials",
-        );
+        setFormError("Invalid credentials");
       } catch (error) {
         console.error("[signin] credentials auth failed", error);
-        setFormError(
-          mode === "register"
-            ? "Unable to sign in after registration."
-            : "Unable to sign in.",
-        );
+        setFormError("Unable to sign in.");
       } finally {
         setFormSubmitting(false);
       }
