@@ -245,12 +245,21 @@ export default function SignInInteractive({
     setFallbackUrl(targetUrl);
 
     if (telegramWebView && isAndroid) {
-      const intentUrl = buildAndroidIntentUrl(targetUrl);
-      if (intentUrl) {
+      const chromeIntentUrl = buildAndroidIntentUrl(targetUrl, {
+        chromePackage: true,
+      });
+      if (chromeIntentUrl) {
         try {
-          window.location.href = intentUrl;
+          window.location.href = chromeIntentUrl;
         } catch {
-          // Ignore intent errors and fall back to window.open.
+          const fallbackIntentUrl = buildAndroidIntentUrl(targetUrl);
+          if (fallbackIntentUrl) {
+            try {
+              window.location.href = fallbackIntentUrl;
+            } catch {
+              // Ignore intent errors and fall back to window.open.
+            }
+          }
         }
       }
     }
@@ -548,7 +557,14 @@ export default function SignInInteractive({
   );
 }
 
-function buildAndroidIntentUrl(targetUrl: string): string | null {
+type AndroidIntentOptions = {
+  chromePackage?: boolean;
+};
+
+function buildAndroidIntentUrl(
+  targetUrl: string,
+  options?: AndroidIntentOptions,
+): string | null {
   try {
     const url = new URL(targetUrl);
     const isLocalhost =
@@ -556,7 +572,14 @@ function buildAndroidIntentUrl(targetUrl: string): string | null {
       url.hostname === "127.0.0.1" ||
       url.hostname === "::1";
     const scheme = isLocalhost ? "http" : "https";
-    return `intent://${url.host}${url.pathname}${url.search}#Intent;scheme=${scheme};end`;
+    const parts = [
+      `intent://${url.host}${url.pathname}${url.search}#Intent;scheme=${scheme};`,
+    ];
+    if (options?.chromePackage) {
+      parts.push("package=com.android.chrome;");
+    }
+    parts.push("end");
+    return parts.join("");
   } catch {
     return null;
   }

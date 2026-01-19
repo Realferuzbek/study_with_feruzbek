@@ -107,7 +107,6 @@ export const authOptions: NextAuthOptions = {
       authorization: {
         params: {
           prompt: "select_account",
-          access_type: "offline",
           response_type: "code",
         },
       },
@@ -115,6 +114,7 @@ export const authOptions: NextAuthOptions = {
     GitHub({
       clientId: process.env.GITHUB_ID!,
       clientSecret: process.env.GITHUB_SECRET!,
+      authorization: { params: { scope: "read:user user:email" } },
     }),
     Credentials({
       name: "Email and Password",
