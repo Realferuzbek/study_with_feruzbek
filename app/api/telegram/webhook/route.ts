@@ -189,10 +189,10 @@ export async function POST(req: NextRequest) {
         })
         .eq("id", targetUser.id);
 
-      const dashUrl = `${baseAppUrl.replace(/\/$/, "")}/dashboard`;
+      const entryUrl = `${baseAppUrl.replace(/\/$/, "")}/signin?inapp=telegram&callbackUrl=/dashboard`;
       await sendMessage(
         chatId,
-        `✅ Telegram linked! You’re all set.\nDashboard: ${dashUrl}\nIf the page still shows “Link Telegram”, keep it open—a refresh will move you automatically.`,
+        `✅ Telegram linked! You’re all set.\nContinue: ${entryUrl}\nIf the page still shows “Link Telegram”, keep it open—a refresh will move you automatically.`,
       );
       return NextResponse.json({ ok: true });
     }

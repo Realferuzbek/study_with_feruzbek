@@ -9,7 +9,11 @@ import {
   sanitizeCallbackPath,
   SWITCH_ACCOUNT_DISABLED_NOTICE,
 } from "@/lib/signin-messages";
-import { buildExternalSigninUrl, isTelegramWebView } from "@/lib/inapp-browser";
+import {
+  buildExternalSigninUrl,
+  isTelegramInAppParam,
+  isTelegramWebView,
+} from "@/lib/inapp-browser";
 
 const SWITCH_ACCOUNT_ENABLED =
   process.env.NEXT_PUBLIC_ENABLE_SWITCH_ACCOUNT === "1";
@@ -39,7 +43,7 @@ export default function SignInInteractive({
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
   const [openBlocked, setOpenBlocked] = useState(false);
   const [isAndroid, setIsAndroid] = useState(false);
-  const [telegramWebView, setTelegramWebView] = useState(
+  const [detectedTelegramWebView, setDetectedTelegramWebView] = useState(
     () => initialIsTelegramWebView ?? false,
   );
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -52,6 +56,8 @@ export default function SignInInteractive({
 
   const switchRequested = params.get("switch") === "1";
   const switchMode = SWITCH_ACCOUNT_ENABLED && switchRequested;
+  const forcedTelegramEntry = isTelegramInAppParam(params.get("inapp"));
+  const telegramWebView = forcedTelegramEntry || detectedTelegramWebView;
 
   const errorCode = params.get("error");
   const blockedValues = params.getAll("blocked");
@@ -261,7 +267,9 @@ export default function SignInInteractive({
 
   useEffect(() => {
     if (typeof navigator === "undefined") return;
-    setTelegramWebView(isTelegramWebView(navigator.userAgent));
+    setDetectedTelegramWebView(
+      (prev) => prev || isTelegramWebView(navigator.userAgent),
+    );
     setIsAndroid(/android/i.test(navigator.userAgent));
   }, []);
 
@@ -311,11 +319,11 @@ export default function SignInInteractive({
           aria-describedby={telegramHelperId}
           className="relative inline-flex h-12 min-h-[48px] w-full items-center justify-center rounded-2xl bg-[linear-gradient(120deg,#7c3aed,#8b5cf6,#a855f7,#ec4899)] px-6 text-sm font-semibold text-white shadow-[0_20px_40px_rgba(123,58,237,0.35)] transition-transform duration-200 hover:scale-[1.01] focus:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400"
         >
-          Continue in Browser
+          Continue on Website
         </button>
         <p id={telegramHelperId} className="text-sm text-neutral-300">
-          Telegram&apos;s in-app browser may ask for email again. Continue in
-          browser for quickest sign-in.
+          Telegram&apos;s in-app browser may ask for email again. Continue on
+          website for quickest sign-in.
         </p>
         {openBlocked && fallbackUrl ? (
           <p className="text-sm text-neutral-400">

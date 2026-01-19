@@ -7,13 +7,30 @@ import { headers } from "next/headers";
 import { Suspense } from "react";
 import { getCachedSession } from "@/lib/server-session";
 import SignInInteractive from "@/components/SignInInteractive";
-import { isTelegramWebView } from "@/lib/inapp-browser";
+import { isTelegramInAppParam, isTelegramWebView } from "@/lib/inapp-browser";
 
-export default async function Home() {
+type HomePageProps = {
+  searchParams?: Record<string, string | string[] | undefined>;
+};
+
+function isTelegramEntryParam(
+  searchParams?: Record<string, string | string[] | undefined>,
+) {
+  if (!searchParams) return false;
+  const raw = searchParams.inapp;
+  if (Array.isArray(raw)) {
+    return raw.some(isTelegramInAppParam);
+  }
+  return isTelegramInAppParam(raw);
+}
+
+export default async function Home({ searchParams }: HomePageProps) {
   const session = await getCachedSession();
   const hintId = "home-auth-hint";
   const isSignedIn = !!session?.user;
-  const isTelegram = isTelegramWebView(headers().get("user-agent") ?? undefined);
+  const isTelegram =
+    isTelegramWebView(headers().get("user-agent") ?? undefined) ||
+    isTelegramEntryParam(searchParams);
 
   return (
     <div className="flex min-h-[100dvh] flex-col items-center justify-center bg-[#07070b] px-6 text-white">
@@ -32,7 +49,13 @@ export default async function Home() {
         </p>
 
         <div className="mt-8 space-y-3">
-          {isSignedIn ? (
+          {isTelegram ? (
+            <SignInInteractive
+              defaultCallbackUrl="/dashboard"
+              hintId={hintId}
+              initialIsTelegramWebView={isTelegram}
+            />
+          ) : isSignedIn ? (
             <a
               href="/dashboard"
               aria-describedby={hintId}
@@ -53,11 +76,13 @@ export default async function Home() {
               />
             </Suspense>
           )}
-          <p id={hintId} className="text-sm text-zinc-400">
-            {isSignedIn
-              ? "You're already signed in. Head straight to your dashboard."
-              : "We only support Google sign-in. You'll be redirected back to your dashboard."}
-          </p>
+          {!isTelegram ? (
+            <p id={hintId} className="text-sm text-zinc-400">
+              {isSignedIn
+                ? "You're already signed in. Head straight to your dashboard."
+                : "We only support Google sign-in. You'll be redirected back to your dashboard."}
+            </p>
+          ) : null}
         </div>
       </div>
     </div>

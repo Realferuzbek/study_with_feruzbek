@@ -13,6 +13,7 @@ import {
   buildBlockedRedirectUrl,
   isBlockedFlag,
 } from "./lib/blocked-user-guard";
+import { isTelegramInAppParam } from "./lib/inapp-browser";
 
 type EnvMap = Record<string, string | undefined>;
 
@@ -227,8 +228,29 @@ export async function middleware(req: NextRequest) {
     ? { ...baseSecurityContext, allowIframe: true }
     : baseSecurityContext;
 
-  // Allow iframe embedding for timer HTML files and make timer assets public
   const isTimerPath = url.pathname.startsWith("/timer/");
+  const isTelegramInapp = isTelegramInAppParam(url.searchParams.get("inapp"));
+  const isTelegramRedirectAllowed =
+    req.method === "GET" &&
+    isTelegramInapp &&
+    !isTimerFeaturePage &&
+    !isTimerPath &&
+    !url.pathname.startsWith("/signin") &&
+    !url.pathname.startsWith("/api/") &&
+    !isPublic(req);
+  if (isTelegramRedirectAllowed) {
+    const cleaned = new URL(req.url);
+    cleaned.searchParams.delete("inapp");
+    const callback = cleaned.pathname + cleaned.search;
+
+    const signin = new URL("/signin", req.url);
+    signin.searchParams.set("inapp", "telegram");
+    signin.searchParams.set("callbackUrl", callback);
+    const redirect = NextResponse.redirect(signin);
+    return applySecurityHeaders(redirect, securityContext);
+  }
+
+  // Allow iframe embedding for timer HTML files and make timer assets public
   if (isTimerPath) {
     const resp = NextResponse.next();
     // Allow iframe embedding for HTML files, regular headers for other assets

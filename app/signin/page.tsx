@@ -8,7 +8,7 @@ import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import SignInInteractive from "@/components/SignInInteractive";
 import { getCachedSession } from "@/lib/server-session";
-import { isTelegramWebView } from "@/lib/inapp-browser";
+import { isTelegramInAppParam, isTelegramWebView } from "@/lib/inapp-browser";
 import {
   sanitizeCallbackPath,
   SWITCH_ACCOUNT_DISABLED_NOTICE,
@@ -29,13 +29,25 @@ function isSwitchRequested(
   return raw === "1";
 }
 
+function isTelegramEntryParam(
+  searchParams?: Record<string, string | string[] | undefined>,
+) {
+  if (!searchParams) return false;
+  const raw = searchParams.inapp;
+  if (Array.isArray(raw)) {
+    return raw.some(isTelegramInAppParam);
+  }
+  return isTelegramInAppParam(raw);
+}
 
 export default async function SignInPage({ searchParams }: SignInPageProps) {
   const hintId = "signin-hint";
   const session = await getCachedSession();
   const isSignedIn = !!session?.user;
   const switchRequested = isSwitchRequested(searchParams);
-  const isTelegram = isTelegramWebView(headers().get("user-agent") ?? undefined);
+  const isTelegram =
+    isTelegramWebView(headers().get("user-agent") ?? undefined) ||
+    isTelegramEntryParam(searchParams);
   const callbackUrl =
     sanitizeCallbackPath(searchParams?.callbackUrl) ?? "/dashboard";
 
