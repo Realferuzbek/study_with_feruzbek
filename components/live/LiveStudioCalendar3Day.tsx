@@ -114,6 +114,7 @@ function clamp(value: number, min: number, max: number) {
 export default function LiveStudioCalendar3Day({
   booking,
   onCreateBooking,
+  onBlockedBooking,
   notice,
   user,
   settings,
