@@ -127,11 +127,11 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
 
         <main className="flex-1 px-4 py-6 md:px-6 md:py-8">
           <div
-            className="grid gap-6 transition-[grid-template-columns] duration-300 lg:grid-cols-[280px_minmax(0,1fr)_var(--live-right-width)] xl:grid-cols-[300px_minmax(0,1fr)_var(--live-right-width-xl)]"
+            className="grid gap-5 transition-[grid-template-columns] duration-300 lg:grid-cols-[280px_minmax(0,1fr)_var(--live-right-width)] xl:grid-cols-[300px_minmax(0,1fr)_var(--live-right-width-xl)]"
             style={
               {
-                "--live-right-width": isRightPanelCollapsed ? "72px" : "280px",
-                "--live-right-width-xl": isRightPanelCollapsed ? "72px" : "300px",
+                "--live-right-width": isRightPanelCollapsed ? "64px" : "280px",
+                "--live-right-width-xl": isRightPanelCollapsed ? "64px" : "300px",
               } as CSSProperties
             }
           >

@@ -22,59 +22,56 @@ export default function LiveStudioSessionSettings({
   onBookSession,
 }: LiveStudioSessionSettingsProps) {
   return (
-    <section className="flex flex-col gap-4">
+    <section className="flex flex-col gap-3">
       <button
         type="button"
         onClick={onBookSession}
-        className="h-12 w-full rounded-2xl bg-[var(--studio-accent)] text-sm font-semibold text-white shadow-[0_14px_28px_rgba(91,92,226,0.35)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(91,92,226,0.4)]"
+        className="h-11 w-full rounded-[20px] bg-[var(--studio-accent)] text-sm font-semibold text-white shadow-[0_12px_26px_rgba(91,92,226,0.32)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_30px_rgba(91,92,226,0.38)]"
       >
         Book session
       </button>
 
-      <div className="rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] p-4 shadow-[0_18px_40px_rgba(15,23,42,0.08)]">
+      <div className="rounded-[24px] border border-[var(--studio-border)] bg-[var(--studio-card)] p-4 shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
         <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold text-[var(--studio-text)]">
+          <div className="text-[15px] font-semibold text-[var(--studio-text)]">
             Session Settings
           </div>
         </div>
 
-        <div className="mt-4 space-y-5">
+        <div className="mt-3 space-y-4">
           <div>
-            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-[var(--studio-subtle)]">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--studio-subtle)]">
               Duration
             </div>
-            <div className="grid grid-cols-3 gap-1.5 rounded-2xl bg-[var(--studio-panel)] p-1.5">
+            <div className="grid grid-cols-3 gap-1 rounded-xl bg-[var(--studio-panel)] p-1">
               {DURATION_OPTIONS.map((value) => {
-                const isHours = value === 120;
-                const label = isHours ? "hours" : "min";
-                const displayValue = isHours ? "2" : String(value);
                 return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => onDurationChange(value)}
-                  className={cx(
-                    "rounded-xl py-2 text-sm font-semibold transition",
-                    durationMinutes === value
-                      ? "bg-[var(--studio-card)] text-[var(--studio-text)] shadow-[0_10px_22px_rgba(15,23,42,0.15)]"
-                      : "text-[var(--studio-muted)] hover:text-[var(--studio-text)]",
-                  )}
-                >
-                  <span className="block text-base leading-tight">
-                    {displayValue}
-                  </span>
-                  <span className="text-[11px] font-medium">{label}</span>
-                </button>
-              );
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => onDurationChange(value)}
+                    className={cx(
+                      "rounded-lg py-2 text-sm font-semibold transition",
+                      durationMinutes === value
+                        ? "bg-[var(--studio-card)] text-[var(--studio-text)] shadow-[0_10px_22px_rgba(15,23,42,0.15)]"
+                        : "text-[var(--studio-muted)] hover:text-[var(--studio-text)]",
+                    )}
+                  >
+                    <span className="block text-base leading-tight">
+                      {value}
+                    </span>
+                    <span className="text-[11px] font-medium">min</span>
+                  </button>
+                );
               })}
             </div>
           </div>
 
           <div>
-            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.32em] text-[var(--studio-subtle)]">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-[var(--studio-subtle)]">
               My Task
             </div>
-            <div className="grid grid-cols-3 gap-1.5 rounded-2xl bg-[var(--studio-panel)] p-1.5">
+            <div className="grid grid-cols-3 gap-1 rounded-xl bg-[var(--studio-panel)] p-1">
               {TASK_OPTIONS.map((option) => {
                 const Icon = option.icon;
                 const isActive = task === option.value;
@@ -84,7 +81,7 @@ export default function LiveStudioSessionSettings({
                     type="button"
                     onClick={() => onTaskChange(option.value)}
                     className={cx(
-                      "flex flex-col items-center justify-center gap-1 rounded-xl py-2 text-[11px] font-semibold transition",
+                      "flex flex-col items-center justify-center gap-1 rounded-lg py-2 text-[11px] font-semibold transition",
                       isActive
                         ? "bg-[var(--studio-card)] text-[var(--studio-text)] shadow-[0_10px_22px_rgba(15,23,42,0.15)]"
                         : "text-[var(--studio-muted)] hover:text-[var(--studio-text)]",

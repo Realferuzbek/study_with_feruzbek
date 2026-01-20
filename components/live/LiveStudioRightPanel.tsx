@@ -57,7 +57,7 @@ export default function LiveStudioRightPanel({
 
   if (collapsed) {
     return (
-      <aside className="rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] shadow-[0_20px_50px_rgba(15,23,42,0.08)] transition-all duration-300">
+      <aside className="rounded-[24px] border border-[var(--studio-border)] bg-[var(--studio-card)] shadow-[0_18px_45px_rgba(15,23,42,0.08)] transition-all duration-300">
         <div className="flex flex-col items-center gap-4 px-3 py-4">
           <button
             type="button"
@@ -93,19 +93,18 @@ export default function LiveStudioRightPanel({
   }
 
   return (
-    <aside className="rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] shadow-[0_20px_50px_rgba(15,23,42,0.08)] transition-all duration-300">
-      <div className="flex items-start justify-between gap-4 px-5 pb-4 pt-5">
+    <aside className="rounded-[24px] border border-[var(--studio-border)] bg-[var(--studio-card)] shadow-[0_18px_45px_rgba(15,23,42,0.08)] transition-all duration-300">
+      <div className="flex items-start justify-between gap-4 px-5 pb-3 pt-4">
         <div className="flex items-start gap-3">
           <AvatarBadge
             avatarUrl={user?.avatarUrl}
             name={user?.name}
             email={user?.email}
-            size={40}
+            size={36}
             alt="Profile avatar"
-            className="shadow-none ring-1 ring-[var(--studio-border)]"
           />
-          <div className="leading-tight">
-            <p className="text-[15px] font-semibold text-[var(--studio-text)]">
+          <div className="leading-snug">
+            <p className="text-[14px] font-semibold text-[var(--studio-text)]">
               {greetingPrimary}
             </p>
             <p className="text-[18px] font-semibold text-[var(--studio-text)]">

@@ -33,12 +33,10 @@ type LiveStudioCalendar3DayProps = {
 const SLOT_MINUTES = 15;
 const START_HOUR = 0;
 const END_HOUR = 24;
-const SLOT_HEIGHT = 22;
+const SLOT_HEIGHT = 24;
 const MAX_DURATION_MINUTES = 120;
-const HOUR_LINE_THICKNESS = 1.5;
-const QUARTER_LINE_THICKNESS = 1;
-const TIME_GUTTER_WIDTH = 68;
-const TIME_GUTTER_PADDING = 12;
+const TIME_GUTTER_WIDTH = 60;
+const TIME_GUTTER_PADDING = 10;
 const DAY_SEPARATOR_THICKNESS = 1;
 const HOUR_LABEL_OFFSET = -2;
 const QUARTER_LABEL_OFFSET = -1;
@@ -311,8 +309,6 @@ export default function LiveStudioCalendar3Day({
     () =>
       ({
         "--studio-slot-height": `${SLOT_HEIGHT}px`,
-        "--studio-hour-line": `${HOUR_LINE_THICKNESS}px`,
-        "--studio-quarter-line": `${QUARTER_LINE_THICKNESS}px`,
         "--studio-time-gutter-width": `${TIME_GUTTER_WIDTH}px`,
         "--studio-time-gutter-padding": `${TIME_GUTTER_PADDING}px`,
         "--studio-day-separator-width": `${DAY_SEPARATOR_THICKNESS}px`,
@@ -329,52 +325,55 @@ export default function LiveStudioCalendar3Day({
 
   return (
     <section
-      className="rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] shadow-[0_20px_60px_rgba(15,23,42,0.08)]"
+      className="rounded-[24px] border border-[var(--studio-border)] bg-[var(--studio-card)] shadow-[0_18px_45px_rgba(15,23,42,0.08)] box-border [&_*]:box-border"
       style={calendarVars}
     >
-      <div className="flex flex-col gap-3 border-b border-[var(--studio-border)] px-4 pb-4 pt-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            className="inline-flex items-center gap-2 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 py-2 text-sm font-semibold text-[var(--studio-text)]"
-          >
-            {formatMonthYear(startDate)}
-            <ChevronDown className="h-4 w-4 text-[var(--studio-muted)]" />
-          </button>
-
-          <div className="ml-auto flex flex-wrap items-center gap-2">
+      <div className="flex flex-col gap-2 border-b border-[var(--studio-border)] px-4 pb-3 pt-4">
+        <div className="grid grid-cols-[var(--studio-time-gutter-width)_1fr] items-center gap-3">
+          <div aria-hidden />
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
-              className="inline-flex items-center gap-2 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 py-2 text-sm font-semibold text-[var(--studio-text)]"
+              className="inline-flex h-9 items-center gap-2 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 text-sm font-semibold text-[var(--studio-text)]"
             >
-              3 days
+              {formatMonthYear(startDate)}
               <ChevronDown className="h-4 w-4 text-[var(--studio-muted)]" />
             </button>
 
-            <div className="flex items-center overflow-hidden rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)]">
+            <div className="ml-auto flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => handleShift(-3)}
-                className="flex h-9 w-9 items-center justify-center text-[var(--studio-muted)] hover:text-[var(--studio-text)]"
-                aria-label="Previous days"
+                className="inline-flex h-9 items-center gap-2 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 text-sm font-semibold text-[var(--studio-text)]"
               >
-                <ChevronLeft className="h-4 w-4" />
+                3 days
+                <ChevronDown className="h-4 w-4 text-[var(--studio-muted)]" />
               </button>
-              <button
-                type="button"
-                onClick={() => setStartDate(startOfDay(new Date()))}
-                className="px-4 text-sm font-semibold text-[var(--studio-text)]"
-              >
-                Today
-              </button>
-              <button
-                type="button"
-                onClick={() => handleShift(3)}
-                className="flex h-9 w-9 items-center justify-center text-[var(--studio-muted)] hover:text-[var(--studio-text)]"
-                aria-label="Next days"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
+
+              <div className="flex items-center overflow-hidden rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)]">
+                <button
+                  type="button"
+                  onClick={() => handleShift(-3)}
+                  className="flex h-9 w-9 items-center justify-center text-[var(--studio-muted)] hover:text-[var(--studio-text)]"
+                  aria-label="Previous days"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStartDate(startOfDay(new Date()))}
+                  className="px-4 text-sm font-semibold text-[var(--studio-text)]"
+                >
+                  Today
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleShift(3)}
+                  className="flex h-9 w-9 items-center justify-center text-[var(--studio-muted)] hover:text-[var(--studio-text)]"
+                  aria-label="Next days"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -386,9 +385,9 @@ export default function LiveStudioCalendar3Day({
         ) : null}
       </div>
 
-      <div className="grid grid-cols-[var(--studio-time-gutter-width)_1fr] border-b border-[var(--studio-border)] bg-[var(--studio-card)] text-[13px] text-[var(--studio-muted)]">
+      <div className="grid grid-cols-[var(--studio-time-gutter-width)_1fr] border-b border-[var(--studio-border)] bg-[var(--studio-card)] text-[12px] text-[var(--studio-muted)]">
         <div
-          className="py-3 text-[11px] font-semibold"
+          className="py-2.5 text-[10px] font-semibold text-right"
           style={{
             paddingLeft: "var(--studio-time-gutter-padding)",
             paddingRight: "var(--studio-time-gutter-padding)",
@@ -400,7 +399,7 @@ export default function LiveStudioCalendar3Day({
           {days.map((day) => (
             <div
               key={day.toISOString()}
-              className="px-4 py-3 text-sm font-semibold text-[var(--studio-text)]"
+              className="px-3 py-2.5 text-[13px] font-semibold text-[var(--studio-text)]"
               style={daySeparatorStyle}
             >
               <span className="text-[var(--studio-muted)]">
@@ -428,10 +427,11 @@ export default function LiveStudioCalendar3Day({
             return (
               <div
                 key={slot}
-                className="flex items-start text-[11px]"
+                className="flex items-start justify-end text-right text-[11px]"
                 style={{
                   height: SLOT_HEIGHT,
                   paddingLeft: "var(--studio-time-gutter-padding)",
+                  paddingRight: "var(--studio-time-gutter-padding)",
                 }}
               >
                 <span
@@ -467,7 +467,39 @@ export default function LiveStudioCalendar3Day({
           ) : null}
         </div>
 
-        <div className="relative grid grid-cols-3">
+        <div className="relative grid grid-cols-3" style={{ height: totalHeight }}>
+          <div className="pointer-events-none absolute inset-0 z-0">
+            <div
+              className="absolute inset-0 grid"
+              style={{
+                gridTemplateRows: `repeat(${totalSlots}, var(--studio-slot-height))`,
+              }}
+            >
+              {Array.from({ length: totalSlots }).map((_, slot) => {
+                const isHour = (slot * SLOT_MINUTES) % 60 === 0;
+                return (
+                  <div
+                    key={slot}
+                    className={
+                      isHour
+                        ? "border-t border-solid border-[var(--studio-grid-strong)]"
+                        : "border-t border-dashed border-[var(--studio-grid)]"
+                    }
+                  />
+                );
+              })}
+            </div>
+
+            <div className="absolute inset-0 grid grid-cols-3">
+              {days.map((day) => (
+                <div
+                  key={`${day.toISOString()}-divider`}
+                  className="border-l border-[var(--studio-grid-strong)]"
+                />
+              ))}
+            </div>
+          </div>
+
           {days.map((day, dayIndex) => (
             <div
               key={day.toISOString()}
@@ -475,15 +507,7 @@ export default function LiveStudioCalendar3Day({
                 columnRefs.current[dayIndex] = node;
               }}
               onMouseDown={(event) => handleMouseDown(dayIndex, event)}
-              className="relative select-none bg-[var(--studio-card)]"
-              style={{
-                height: totalHeight,
-                backgroundImage:
-                  "linear-gradient(to bottom, var(--studio-grid-strong) 0, var(--studio-grid-strong) var(--studio-hour-line), transparent var(--studio-hour-line), transparent 100%), linear-gradient(to bottom, var(--studio-grid) 0, var(--studio-grid) var(--studio-quarter-line), transparent var(--studio-quarter-line), transparent 100%)",
-                backgroundSize:
-                  "100% calc(var(--studio-slot-height) * 4), 100% var(--studio-slot-height)",
-                ...daySeparatorStyle,
-              }}
+              className="relative z-10 select-none bg-[var(--studio-card)]"
             >
               {booking && bookingDayIndex === dayIndex ? (
                 <CalendarBlock
@@ -512,7 +536,7 @@ export default function LiveStudioCalendar3Day({
 
           {isTodayVisible ? (
             <div
-              className="pointer-events-none absolute left-0 right-0 h-px bg-rose-500"
+              className="pointer-events-none absolute left-0 right-0 z-20 h-px bg-rose-500"
               style={{ top: nowTop }}
             />
           ) : null}
