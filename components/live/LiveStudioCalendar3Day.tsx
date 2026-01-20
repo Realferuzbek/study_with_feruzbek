@@ -244,9 +244,10 @@ export default function LiveStudioCalendar3Day({
 
   useEffect(() => {
     if (!dragging) return;
+    const dragSnapshot = dragging;
 
     function handleMove(event: MouseEvent) {
-      const slot = getSlotFromClientY(event.clientY, dragging.dayIndex);
+      const slot = getSlotFromClientY(event.clientY, dragSnapshot.dayIndex);
       if (slot === null) return;
       setDragging((prev) => {
         if (!prev) return prev;
@@ -259,9 +260,8 @@ export default function LiveStudioCalendar3Day({
     }
 
     function handleUp() {
-      if (!dragging) return;
-      const range = resolveRange(dragging);
-      const day = days[dragging.dayIndex];
+      const range = resolveRange(dragSnapshot);
+      const day = days[dragSnapshot.dayIndex];
       const start = slotToDate(day, range.startSlot);
       const end = slotToDate(day, range.endSlot + 1);
       onCreateBooking({
