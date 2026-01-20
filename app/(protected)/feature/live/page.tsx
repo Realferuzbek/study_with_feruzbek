@@ -1,11 +1,11 @@
-import LiveRoomsLobby from "@/components/live/LiveRoomsLobby";
 import { getCachedSession } from "@/lib/server-session";
 import AuthRequiredPanel from "@/components/AuthRequiredPanel";
+import LiveStreamStudioShell from "@/components/live/LiveStreamStudioShell";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export default async function LiveRoomsFeature() {
+export default async function LiveStreamStudioFeature() {
   const session = await getCachedSession();
   const user = session?.user as
     | {
@@ -13,6 +13,8 @@ export default async function LiveRoomsFeature() {
         display_name?: string | null;
         name?: string | null;
         email?: string | null;
+        avatar_url?: string | null;
+        image?: string | null;
         is_admin?: boolean | null;
       }
     | undefined;
@@ -21,8 +23,8 @@ export default async function LiveRoomsFeature() {
     return (
       <div className="min-h-[100dvh] bg-[#07070b] text-white">
         <AuthRequiredPanel
-          title="Sign in to join live rooms"
-          description="Browse live rooms and join the conversation once you're signed in."
+          title="Sign in to access Live Stream Studio"
+          description="Book focus sessions and manage your schedule once you're signed in."
           callbackUrl="/feature/live"
         />
       </div>
@@ -30,16 +32,14 @@ export default async function LiveRoomsFeature() {
   }
 
   return (
-    <div className="bg-[#07070b] min-h-[100dvh]">
-      <LiveRoomsLobby
-        user={{
-          id: user.id,
-          displayName: user.display_name ?? null,
-          name: user.name ?? null,
-          email: user.email ?? null,
-          isAdmin: user.is_admin ?? false,
-        }}
-      />
-    </div>
+    <LiveStreamStudioShell
+      user={{
+        id: user.id,
+        displayName: user.display_name ?? null,
+        name: user.name ?? null,
+        email: user.email ?? null,
+        avatarUrl: user.avatar_url ?? user.image ?? null,
+      }}
+    />
   );
 }

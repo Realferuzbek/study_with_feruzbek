@@ -213,7 +213,7 @@ export default function LiveVoiceRoom({ roomId, user }: LiveVoiceRoomProps) {
     try {
       await hmsActions.leave();
     } finally {
-      router.push("/feature/live");
+      router.push("/feature/live/rooms");
     }
   }
 
@@ -230,7 +230,7 @@ export default function LiveVoiceRoom({ roomId, user }: LiveVoiceRoomProps) {
         return;
       }
       await hmsActions.leave();
-      router.push("/feature/live");
+      router.push("/feature/live/rooms");
     } catch (err) {
       console.error(err);
       setJoinError("Failed to end room.");
@@ -247,7 +247,7 @@ export default function LiveVoiceRoom({ roomId, user }: LiveVoiceRoomProps) {
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => router.push("/feature/live")}
+            onClick={() => router.push("/feature/live/rooms")}
             className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/70 transition hover:border-white/30 hover:text-white"
           >
             <ArrowLeft className="h-4 w-4" />
