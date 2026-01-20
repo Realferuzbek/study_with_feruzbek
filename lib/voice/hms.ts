@@ -51,7 +51,7 @@ export function createHmsAuthToken(params: {
   secret: string;
   roomId: string;
   userId: string;
-  role: "viewer" | "host" | "admin";
+  role: "viewer" | "host" | "admin" | "peer";
   ttlSeconds?: number;
 }) {
   const now = nowInSeconds();
