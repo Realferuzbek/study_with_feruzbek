@@ -15,4 +15,4 @@ export const TASK_OPTIONS: TaskOption[] = [
   { value: "anything", label: "Anything", icon: Shuffle },
 ];
 
-export const DURATION_OPTIONS = [25, 50, 75] as const;
+export const DURATION_OPTIONS = [30, 60, 120] as const;

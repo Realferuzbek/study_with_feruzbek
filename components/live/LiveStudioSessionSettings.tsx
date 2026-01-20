@@ -1,6 +1,5 @@
 "use client";
 
-import { Info } from "lucide-react";
 import { DURATION_OPTIONS, TASK_OPTIONS, type StudioTask } from "./liveStudioOptions";
 
 type LiveStudioSessionSettingsProps = {
@@ -37,16 +36,19 @@ export default function LiveStudioSessionSettings({
           <div className="text-sm font-semibold text-[var(--studio-text)]">
             Session Settings
           </div>
-          <Info className="h-4 w-4 text-[var(--studio-muted)]" />
         </div>
 
-        <div className="mt-4 space-y-4">
+        <div className="mt-4 space-y-5">
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.28em] text-[var(--studio-subtle)]">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-[var(--studio-subtle)]">
               Duration
             </div>
-            <div className="grid grid-cols-3 gap-2 rounded-2xl bg-[var(--studio-panel)] p-1">
-              {DURATION_OPTIONS.map((value) => (
+            <div className="grid grid-cols-3 gap-1.5 rounded-2xl bg-[var(--studio-panel)] p-1.5">
+              {DURATION_OPTIONS.map((value) => {
+                const isHours = value === 120;
+                const label = isHours ? "hours" : "min";
+                const displayValue = isHours ? "2" : String(value);
+                return (
                 <button
                   key={value}
                   type="button"
@@ -58,18 +60,21 @@ export default function LiveStudioSessionSettings({
                       : "text-[var(--studio-muted)] hover:text-[var(--studio-text)]",
                   )}
                 >
-                  <span className="block text-base">{value}</span>
-                  <span className="text-xs font-medium">min</span>
+                  <span className="block text-base leading-tight">
+                    {displayValue}
+                  </span>
+                  <span className="text-[11px] font-medium">{label}</span>
                 </button>
-              ))}
+              );
+              })}
             </div>
           </div>
 
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.28em] text-[var(--studio-subtle)]">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.32em] text-[var(--studio-subtle)]">
               My Task
             </div>
-            <div className="grid grid-cols-3 gap-2 rounded-2xl bg-[var(--studio-panel)] p-1">
+            <div className="grid grid-cols-3 gap-1.5 rounded-2xl bg-[var(--studio-panel)] p-1.5">
               {TASK_OPTIONS.map((option) => {
                 const Icon = option.icon;
                 const isActive = task === option.value;
@@ -79,14 +84,14 @@ export default function LiveStudioSessionSettings({
                     type="button"
                     onClick={() => onTaskChange(option.value)}
                     className={cx(
-                      "flex flex-col items-center justify-center gap-1 rounded-xl py-2 text-xs font-semibold transition",
+                      "flex flex-col items-center justify-center gap-1 rounded-xl py-2 text-[11px] font-semibold transition",
                       isActive
                         ? "bg-[var(--studio-card)] text-[var(--studio-text)] shadow-[0_10px_22px_rgba(15,23,42,0.15)]"
                         : "text-[var(--studio-muted)] hover:text-[var(--studio-text)]",
                     )}
                   >
                     <Icon className="h-4 w-4" />
-                    <span>{option.label}</span>
+                    <span className="leading-tight">{option.label}</span>
                   </button>
                 );
               })}

@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { HelpCircle, Home, Settings, User, Users } from "lucide-react";
+import { Home, Settings, User } from "lucide-react";
 
 type LiveStudioSidebarProps = {
   user?: {
@@ -22,9 +22,7 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { label: "Home", href: "/feature/live", icon: Home },
-  { label: "People", href: "/feature/live/rooms", icon: Users },
   { label: "Settings", icon: Settings },
-  { label: "Help", icon: HelpCircle },
 ];
 
 function cx(...classes: Array<string | false | undefined>) {
@@ -50,9 +48,9 @@ export default function LiveStudioSidebar({ user }: LiveStudioSidebarProps) {
   return (
     <aside className="flex w-full items-center justify-between gap-4 bg-[var(--studio-sidebar)] px-3 py-3 text-white shadow-[inset_-1px_0_0_rgba(255,255,255,0.12)] md:w-16 md:flex-col md:justify-start md:gap-5 md:py-6">
       <Link
-        href="/leaderboard"
+        href="/dashboard"
         className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/15 p-2 shadow-[0_10px_20px_rgba(0,0,0,0.18)]"
-        aria-label="StudyMate leaderboard"
+        aria-label="StudyMate dashboard"
       >
         <Image src="/logo.svg" alt="StudyMate logo" width={28} height={28} />
       </Link>

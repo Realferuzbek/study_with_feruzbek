@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { TASK_OPTIONS, type StudioTask } from "./liveStudioOptions";
@@ -33,8 +33,15 @@ type LiveStudioCalendar3DayProps = {
 const SLOT_MINUTES = 15;
 const START_HOUR = 0;
 const END_HOUR = 24;
-const SLOT_HEIGHT = 20;
+const SLOT_HEIGHT = 22;
 const MAX_DURATION_MINUTES = 120;
+const HOUR_LINE_THICKNESS = 1.5;
+const QUARTER_LINE_THICKNESS = 1;
+const TIME_GUTTER_WIDTH = 68;
+const TIME_GUTTER_PADDING = 12;
+const DAY_SEPARATOR_THICKNESS = 1;
+const HOUR_LABEL_OFFSET = -2;
+const QUARTER_LABEL_OFFSET = -1;
 
 type DragState = {
   dayIndex: number;
@@ -300,8 +307,31 @@ export default function LiveStudioCalendar3Day({
   const previewRange = dragging ? resolveRange(dragging) : null;
   const previewDayIndex = dragging?.dayIndex ?? null;
 
+  const calendarVars = useMemo(
+    () =>
+      ({
+        "--studio-slot-height": `${SLOT_HEIGHT}px`,
+        "--studio-hour-line": `${HOUR_LINE_THICKNESS}px`,
+        "--studio-quarter-line": `${QUARTER_LINE_THICKNESS}px`,
+        "--studio-time-gutter-width": `${TIME_GUTTER_WIDTH}px`,
+        "--studio-time-gutter-padding": `${TIME_GUTTER_PADDING}px`,
+        "--studio-day-separator-width": `${DAY_SEPARATOR_THICKNESS}px`,
+      }) as CSSProperties,
+    [],
+  );
+
+  const daySeparatorStyle: CSSProperties = {
+    borderLeftWidth: "var(--studio-day-separator-width)",
+    borderLeftColor: "var(--studio-grid-strong)",
+    borderLeftStyle: "solid",
+  };
+
+
   return (
-    <section className="rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+    <section
+      className="rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] shadow-[0_20px_60px_rgba(15,23,42,0.08)]"
+      style={calendarVars}
+    >
       <div className="flex flex-col gap-3 border-b border-[var(--studio-border)] px-4 pb-4 pt-4">
         <div className="flex flex-wrap items-center gap-3">
           <button
@@ -356,13 +386,22 @@ export default function LiveStudioCalendar3Day({
         ) : null}
       </div>
 
-      <div className="grid grid-cols-[72px_1fr] border-b border-[var(--studio-border)] bg-[var(--studio-card)] text-[13px] text-[var(--studio-muted)]">
-        <div className="px-3 py-3 text-[11px] font-semibold">{getTimezoneLabel()}</div>
+      <div className="grid grid-cols-[var(--studio-time-gutter-width)_1fr] border-b border-[var(--studio-border)] bg-[var(--studio-card)] text-[13px] text-[var(--studio-muted)]">
+        <div
+          className="py-3 text-[11px] font-semibold"
+          style={{
+            paddingLeft: "var(--studio-time-gutter-padding)",
+            paddingRight: "var(--studio-time-gutter-padding)",
+          }}
+        >
+          {getTimezoneLabel()}
+        </div>
         <div className="grid grid-cols-3">
-          {days.map((day, index) => (
+          {days.map((day) => (
             <div
               key={day.toISOString()}
-              className="border-l border-[var(--studio-border)] px-4 py-3 text-sm font-semibold text-[var(--studio-text)]"
+              className="px-4 py-3 text-sm font-semibold text-[var(--studio-text)]"
+              style={daySeparatorStyle}
             >
               <span className="text-[var(--studio-muted)]">
                 {formatWeekday(day)}
@@ -375,10 +414,10 @@ export default function LiveStudioCalendar3Day({
 
       <div
         ref={scrollRef}
-        className="grid max-h-[70vh] grid-cols-[72px_1fr] overflow-y-auto"
+        className="grid max-h-[70vh] grid-cols-[var(--studio-time-gutter-width)_1fr] overflow-y-auto"
       >
         <div
-          className="relative border-r border-[var(--studio-border)] bg-[var(--studio-panel)]"
+          className="relative bg-[var(--studio-panel)]"
           style={{ height: totalHeight }}
         >
           {Array.from({ length: totalSlots }).map((_, slot) => {
@@ -389,15 +428,23 @@ export default function LiveStudioCalendar3Day({
             return (
               <div
                 key={slot}
-                className="flex items-start justify-end pr-3 text-[11px]"
-                style={{ height: SLOT_HEIGHT }}
+                className="flex items-start text-[11px]"
+                style={{
+                  height: SLOT_HEIGHT,
+                  paddingLeft: "var(--studio-time-gutter-padding)",
+                }}
               >
                 <span
                   className={
                     isHour
-                      ? "font-semibold text-[var(--studio-text)]"
-                      : "text-[10px] text-[var(--studio-subtle)]"
+                      ? "text-[12px] font-semibold leading-none text-[var(--studio-text)]"
+                      : "text-[10px] leading-none text-[var(--studio-subtle)]"
                   }
+                  style={{
+                    transform: `translateY(${
+                      isHour ? HOUR_LABEL_OFFSET : QUARTER_LABEL_OFFSET
+                    }px)`,
+                  }}
                 >
                   {label}
                 </span>
@@ -407,8 +454,11 @@ export default function LiveStudioCalendar3Day({
 
           {isTodayVisible ? (
             <div
-              className="absolute left-0 flex items-center gap-2"
-              style={{ top: nowTop - 8 }}
+              className="absolute flex items-center gap-2"
+              style={{
+                top: nowTop - 8,
+                left: "var(--studio-time-gutter-padding)",
+              }}
             >
               <span className="rounded-full bg-[var(--studio-card)] px-2 py-0.5 text-[10px] font-semibold text-rose-500 shadow-sm">
                 {formatTimeCompact(now)}
@@ -425,12 +475,14 @@ export default function LiveStudioCalendar3Day({
                 columnRefs.current[dayIndex] = node;
               }}
               onMouseDown={(event) => handleMouseDown(dayIndex, event)}
-              className="relative select-none border-l border-[var(--studio-border)] bg-[var(--studio-card)]"
+              className="relative select-none bg-[var(--studio-card)]"
               style={{
                 height: totalHeight,
                 backgroundImage:
-                  "linear-gradient(to bottom, var(--studio-grid-strong) 1px, transparent 1px), linear-gradient(to bottom, var(--studio-grid) 1px, transparent 1px)",
-                backgroundSize: `100% ${SLOT_HEIGHT * 4}px, 100% ${SLOT_HEIGHT}px`,
+                  "linear-gradient(to bottom, var(--studio-grid-strong) 0, var(--studio-grid-strong) var(--studio-hour-line), transparent var(--studio-hour-line), transparent 100%), linear-gradient(to bottom, var(--studio-grid) 0, var(--studio-grid) var(--studio-quarter-line), transparent var(--studio-quarter-line), transparent 100%)",
+                backgroundSize:
+                  "100% calc(var(--studio-slot-height) * 4), 100% var(--studio-slot-height)",
+                ...daySeparatorStyle,
               }}
             >
               {booking && bookingDayIndex === dayIndex ? (

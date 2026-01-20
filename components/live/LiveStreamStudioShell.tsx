@@ -24,11 +24,12 @@ const THEME_STORAGE_KEY = "studymate-live-studio-theme";
 
 export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellProps) {
   const [theme, setTheme] = useState<ThemeMode>("light");
-  const [durationMinutes, setDurationMinutes] = useState(25);
+  const [durationMinutes, setDurationMinutes] = useState(30);
   const [task, setTask] = useState<StudioTask>("desk");
   const [booking, setBooking] = useState<StudioBooking | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
+  const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -77,8 +78,8 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
             "--studio-text": "#111827",
             "--studio-muted": "#6b7280",
             "--studio-subtle": "#94a3b8",
-            "--studio-grid": "#e6eaf2",
-            "--studio-grid-strong": "#d6ddec",
+            "--studio-grid": "#edf1f7",
+            "--studio-grid-strong": "#d7deec",
             "--studio-accent": "#5b5ce2",
             "--studio-accent-soft": "#eef0ff",
             "--studio-accent-ink": "#2b2f86",
@@ -125,7 +126,15 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         />
 
         <main className="flex-1 px-4 py-6 md:px-6 md:py-8">
-          <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)_280px] xl:grid-cols-[300px_minmax(0,1fr)_300px]">
+          <div
+            className="grid gap-6 transition-[grid-template-columns] duration-300 lg:grid-cols-[280px_minmax(0,1fr)_var(--live-right-width)] xl:grid-cols-[300px_minmax(0,1fr)_var(--live-right-width-xl)]"
+            style={
+              {
+                "--live-right-width": isRightPanelCollapsed ? "72px" : "280px",
+                "--live-right-width-xl": isRightPanelCollapsed ? "72px" : "300px",
+              } as CSSProperties
+            }
+          >
             <LiveStudioSessionSettings
               durationMinutes={durationMinutes}
               onDurationChange={setDurationMinutes}
@@ -162,6 +171,8 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
                 setTheme((prev) => (prev === "light" ? "dark" : "light"))
               }
               booking={booking}
+              collapsed={isRightPanelCollapsed}
+              onCollapseChange={setIsRightPanelCollapsed}
             />
           </div>
         </main>
