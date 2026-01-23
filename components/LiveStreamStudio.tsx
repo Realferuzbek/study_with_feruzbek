@@ -14,6 +14,7 @@ import {
   useHMSActions,
   useHMSStore,
 } from "@100mslive/react-sdk";
+import { csrfFetch } from "@/lib/csrf-client";
 
 type Role = "admin" | "host" | "viewer";
 
@@ -27,12 +28,6 @@ const roleToRoomCode: Record<Role, string | undefined> = {
   viewer:
     process.env.NEXT_PUBLIC_HMS_ROOM_CODE_VIEWER ||
     process.env.HMS_ROOM_CODE_VIEWER,
-};
-
-const roleToAuthToken: Record<Role, string | undefined> = {
-  admin: process.env.NEXT_PUBLIC_HMS_ADMIN_AUTH_TOKEN,
-  host: process.env.NEXT_PUBLIC_HMS_HOST_AUTH_TOKEN,
-  viewer: process.env.NEXT_PUBLIC_HMS_VIEWER_AUTH_TOKEN,
 };
 
 export default function LiveStreamStudio() {
@@ -56,21 +51,39 @@ export default function LiveStreamStudio() {
       setJoining(true);
       setError(null);
       const roomCode = roleToRoomCode[role];
-      let authToken: string | undefined;
-
-      if (roomCode) {
-        authToken = await hmsActions.getAuthTokenByRoomCode({ roomCode });
-      } else {
-        authToken = roleToAuthToken[role];
-      }
-
-      if (!authToken) {
+      if (!roomCode) {
         throw new Error(
           `Room code missing for ${role}. Add it to your environment variables.`,
         );
       }
 
-      await hmsActions.join({ userName: name || "Guest", authToken });
+      const fallbackId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `guest-${Date.now()}-${Math.floor(Math.random() * 10_000)}`;
+      const userId = (name || "").trim() || fallbackId;
+
+      const res = await csrfFetch("/api/100ms/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          roomCode,
+          role,
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        const message = payload?.error ?? "Failed to join the room.";
+        throw new Error(message);
+      }
+
+      const payload = await res.json();
+      if (!payload?.token) {
+        throw new Error("Missing auth token.");
+      }
+
+      await hmsActions.join({ userName: name || "Guest", authToken: payload.token });
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to join the room.";
@@ -150,10 +163,10 @@ export default function LiveStreamStudio() {
             {joining ? "Joining..." : "Join Room"}
           </button>
           {error ? <p className="text-rose-400 text-sm">{error}</p> : null}
-          {!roleToRoomCode[role] && !roleToAuthToken[role] ? (
+          {!roleToRoomCode[role] ? (
             <p className="text-yellow-400 text-xs">
-              Add the room code or auth token for the selected role to
-              `.env.local` and redeploy to enable joining.
+              Add the room code for the selected role to `.env.local` and
+              redeploy to enable joining.
             </p>
           ) : null}
         </div>

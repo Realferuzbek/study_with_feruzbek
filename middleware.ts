@@ -85,6 +85,8 @@ const PUBLIC_PATHS = new Set<string>([
   "/api/cron/leaderboard",
   "/api/cron/nightly-reindex",
   "/api/telegram/webhook",
+  "/api/100ms/webhook",
+  "/api/100ms/token",
   "/api/admin/state",
   "/_next",
   "/favicon.ico",
