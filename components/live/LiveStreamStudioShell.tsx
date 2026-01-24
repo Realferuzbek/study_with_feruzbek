@@ -593,15 +593,16 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
           return;
         }
         const payload = (await res.json()) as { id?: string };
-        if (payload?.id) {
+        const payloadId = payload?.id;
+        if (payloadId) {
           updateRangeSessions(visibleRangeKey, (current) =>
             current.map((session) =>
               session.id === tempId
-                ? { ...session, id: payload.id, isOptimistic: false }
+                ? { ...session, id: payloadId, isOptimistic: false }
                 : session,
             ),
           );
-          setSelectedSessionId(payload.id);
+          setSelectedSessionId(payloadId);
         } else {
           updateRangeSessions(visibleRangeKey, (current) =>
             current.map((session) =>
