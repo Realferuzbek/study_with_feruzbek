@@ -36,13 +36,13 @@ import {
   getMyStreak,
   getMyTasksToday,
   getMyWeekSummary,
-  getTodaysMantra,
+  getTodaysMantraPublic,
 } from "@/lib/ai-chat/tools";
 import {
   isToolAuthRequired,
-  routeTool,
+  routeIntent,
   type ToolName,
-} from "@/lib/ai-chat/toolRouter";
+} from "@/lib/ai-chat/router";
 import { embedBatch, generateAnswer } from "@/lib/rag/ai";
 import { vector, type SnippetMeta } from "@/lib/rag/vector";
 import { rateLimit } from "@/lib/rateLimit";
@@ -169,25 +169,6 @@ export async function POST(req: Request) {
         { headers: noCache() },
       );
     }
-    if (refusal === "personal" && !viewerId) {
-      const reply = getSignInRequiredResponse(language);
-      await persistLog({
-        userId: viewerId,
-        sessionId,
-        language,
-        input: inputRaw,
-        reply,
-        usedRag: false,
-        metadata: {
-          reason: "personal_sign_in_required",
-          usedTools: false,
-        },
-      });
-      return NextResponse.json(
-        { text: reply, usedRag: false, language },
-        { headers: noCache() },
-      );
-    }
 
     const leaderboardIntent = isLeaderboardIntent(normalizedInput);
     const offTopic =
@@ -221,9 +202,9 @@ export async function POST(req: Request) {
       );
     }
 
-    const toolSelection = await routeTool(embedding);
-    if (toolSelection) {
-      const toolName = toolSelection.name;
+    const routeSelection = await routeIntent(inputRaw, embedding);
+    if (routeSelection.kind === "tool") {
+      const toolName = routeSelection.tool;
       if (isToolAuthRequired(toolName) && !viewerId) {
         const reply = getSignInRequiredResponse(language);
         await persistLog({
@@ -300,7 +281,8 @@ export async function POST(req: Request) {
         metadata: {
           usedTools: true,
           toolName,
-          toolScore: toolSelection.score,
+          toolScore: routeSelection.score ?? null,
+          toolSource: routeSelection.source,
           toolMs,
           matches: toolRetrieval.contexts.length,
           bestScore: toolRetrieval.bestScore,
@@ -328,6 +310,7 @@ export async function POST(req: Request) {
         usedRag: true,
         usedTools: true,
         toolName,
+        toolSource: routeSelection.source,
         language,
         bestScore: Number(
           toolRetrieval.bestScore?.toFixed?.(3) ?? toolRetrieval.bestScore,
@@ -523,19 +506,19 @@ type ToolSnippet = {
 
 async function runTool(toolName: ToolName, viewerId: string | null) {
   switch (toolName) {
-    case "getTodaysMantra":
-      return getTodaysMantra();
-    case "getLiveSessionsPublic":
+    case "TOOL_TODAYS_MANTRA":
+      return getTodaysMantraPublic();
+    case "TOOL_LIVE_SESSIONS":
       return getLiveSessionsPublic();
-    case "getLeaderboardTopNowPublic":
+    case "TOOL_LEADERBOARD_TOP_NOW":
       return getLeaderboardTopNowPublic();
-    case "getMyTasksToday":
+    case "TOOL_MY_TASKS_TODAY":
       return viewerId ? getMyTasksToday(viewerId) : null;
-    case "getMyNextBookedSession":
+    case "TOOL_MY_NEXT_SESSION":
       return viewerId ? getMyNextBookedSession(viewerId) : null;
-    case "getMyStreak":
-      return viewerId ? getMyStreak(viewerId) : { available: false, message: "not available yet" };
-    case "getMyWeekSummary":
+    case "TOOL_MY_STREAK":
+      return viewerId ? getMyStreak(viewerId) : null;
+    case "TOOL_MY_WEEK_SUMMARY":
       return viewerId ? getMyWeekSummary(viewerId) : null;
     default:
       return null;
@@ -544,101 +527,113 @@ async function runTool(toolName: ToolName, viewerId: string | null) {
 
 function buildToolSnippet(toolName: ToolName, payload: any): ToolSnippet {
   switch (toolName) {
-    case "getTodaysMantra": {
+    case "TOOL_TODAYS_MANTRA": {
       if (!payload) {
         return {
           title: "Today's mantra",
-          text: "Today's mantra is unavailable right now.",
+          text: "Today's mantra is unavailable right now. You can check the Motivation Vault page.",
         };
       }
       const index =
-        typeof payload.index === "number" ? `#${payload.index + 1}` : "";
-      const dateLabel = payload.dateLabel ?? payload.dateISO ?? "today";
-      const quote = payload.quote ?? "";
+        typeof payload.quoteIndex === "number" ? `#${payload.quoteIndex}` : "";
+      const dateLabel = payload.dateLabel ?? "today";
+      const quote = payload.text ?? "";
       return {
         title: "Today's mantra",
         text: `Today's mantra (${dateLabel}) ${index}: ${quote}`.trim(),
       };
     }
-    case "getLiveSessionsPublic": {
-      const live = Array.isArray(payload?.live) ? payload.live : [];
-      const upcoming = Array.isArray(payload?.upcoming) ? payload.upcoming : [];
-      const lines = [`Live sessions now: ${live.length}`];
-      live.forEach((session: any, index: number) => {
-        const title = session?.title ?? "Focus session";
+    case "TOOL_LIVE_SESSIONS": {
+      const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
+      if (!sessions.length) {
+        return {
+          title: "Live sessions",
+          text: "No joinable live sessions right now. Check Live Stream Studio for upcoming rooms.",
+        };
+      }
+      const lines = [`Joinable sessions right now: ${sessions.length}`];
+      sessions.forEach((session: any, index: number) => {
+        const topic = session?.topic ?? "Focus session";
+        const mode = session?.mode ? `mode: ${session.mode}` : "mode: not set";
+        const host = session?.creatorDisplayName
+          ? `host: ${session.creatorDisplayName}`
+          : "host: Focus Host";
         lines.push(
-          `Live ${index + 1}: ${title} | ${session.startsAt} to ${session.endsAt} | ${session.participantCount}/${session.maxParticipants} participants`,
-        );
-      });
-      lines.push(`Upcoming sessions: ${upcoming.length}`);
-      upcoming.forEach((session: any, index: number) => {
-        const title = session?.title ?? "Focus session";
-        lines.push(
-          `Upcoming ${index + 1}: ${title} | ${session.startsAt} to ${session.endsAt} | ${session.participantCount}/${session.maxParticipants} participants`,
+          `${index + 1}. ${topic} | ${session.startsAt} to ${session.endsAt} | ${mode} | ${host}`,
         );
       });
       return { title: "Live sessions", text: lines.join("\n") };
     }
-    case "getLeaderboardTopNowPublic": {
+    case "TOOL_LEADERBOARD_TOP_NOW": {
+      if (!payload?.available) {
+        return {
+          title: "Leaderboard top",
+          text: "No leaderboard snapshot is available yet. Check Leaderboard -> History.",
+        };
+      }
       const entries = Array.isArray(payload?.entries) ? payload.entries : [];
       if (!entries.length) {
         return {
           title: "Leaderboard top",
-          text: "No leaderboard snapshot is available right now.",
+          text: "No leaderboard snapshot is available yet. Check Leaderboard -> History.",
         };
       }
-      const scope = payload?.scope ?? "latest";
-      const periodStart = payload?.periodStart ?? "";
+      const scope = payload?.scope ?? "day";
+      const periodStart = payload?.periodStart ?? payload?.date ?? "";
       const periodEnd = payload?.periodEnd ?? "";
       const period =
-        periodStart && periodEnd ? `${periodStart} to ${periodEnd}` : periodStart || periodEnd || "latest period";
-      const lines = [`Latest leaderboard (${scope}, ${period}):`];
+        periodStart && periodEnd
+          ? `${periodStart} to ${periodEnd}`
+          : periodStart || periodEnd || "latest period";
+      const lines = [`Leaderboard top right now (${scope}, ${period}):`];
       entries.forEach((entry: any) => {
         const minutes =
-          typeof entry.minutes === "number" ? `${entry.minutes} min` : "minutes unavailable";
+          typeof entry.minutes === "number"
+            ? `${entry.minutes} min`
+            : "minutes unavailable";
         lines.push(`#${entry.rank} ${entry.username} - ${minutes}`);
       });
       return { title: "Leaderboard top", text: lines.join("\n") };
     }
-    case "getMyTasksToday": {
+    case "TOOL_MY_TASKS_TODAY": {
       const date = payload?.date ?? "today";
       const tasks = Array.isArray(payload?.tasks) ? payload.tasks : [];
       if (!tasks.length) {
         return {
           title: "Tasks today",
-          text: `No tasks due or scheduled for ${date}.`,
+          text: `No tasks due or scheduled for ${date}. You can check Task Scheduler for details.`,
         };
       }
       const lines = [`Tasks for ${date} (Asia/Tashkent):`];
       tasks.forEach((task: any) => {
-        const due =
-          task.dueDate ?? task.dueAt ?? task.dueStartDate ?? task.dueEndDate ?? "no due date";
+        const due = task.dueAt ?? task.dueDate ?? "no due date";
         const scheduled = task.scheduledStart ?? task.scheduledEnd ?? "not scheduled";
+        const source = task.source ? `source: ${task.source}` : "source: unknown";
         lines.push(
-          `- ${task.title} [${task.status}] | due: ${due} | scheduled: ${scheduled}`,
+          `- ${task.title} [${task.status}] | due: ${due} | scheduled: ${scheduled} | ${source}`,
         );
       });
       return { title: "Tasks today", text: lines.join("\n") };
     }
-    case "getMyNextBookedSession": {
+    case "TOOL_MY_NEXT_SESSION": {
       if (!payload) {
         return {
           title: "Next booked session",
-          text: "No upcoming booked sessions found.",
+          text: "No upcoming booked sessions found. Check Live Stream Studio for sessions.",
         };
       }
-      const title = payload.title ?? "Focus session";
-      const status = payload.status ?? "scheduled";
+      const title = payload.topic ?? "Focus session";
+      const mode = payload.mode ? `mode: ${payload.mode}` : "mode: not set";
       return {
         title: "Next booked session",
-        text: `Next booked session: ${title} | ${payload.startsAt} to ${payload.endsAt} | status: ${status}`,
+        text: `Next booked session: ${title} | ${payload.startsAt} to ${payload.endsAt} | ${mode}`,
       };
     }
-    case "getMyStreak": {
-      if (!payload?.available) {
+    case "TOOL_MY_STREAK": {
+      if (!payload) {
         return {
           title: "Streak",
-          text: payload?.message ?? "Streak data is not available yet.",
+          text: "Streak data is not available yet. Check your profile or dashboard.",
         };
       }
       return {
@@ -646,25 +641,21 @@ function buildToolSnippet(toolName: ToolName, payload: any): ToolSnippet {
         text: `Current streak: ${payload.current} days. Longest streak: ${payload.longest} days.`,
       };
     }
-    case "getMyWeekSummary": {
+    case "TOOL_MY_WEEK_SUMMARY": {
       if (!payload) {
         return {
           title: "Weekly summary",
-          text: "Weekly summary is not available yet.",
+          text: "Weekly summary is not available yet. Check your dashboard for progress.",
         };
       }
       const lines = [
         `Weekly summary (${payload.rangeStart} to ${payload.rangeEnd}):`,
         `Completed tasks: ${payload.completedTasks}`,
-        payload.focusedMinutes === null
-          ? "Focus time: not available yet"
-          : `Focus time: ${payload.focusedMinutes} minutes`,
+        `Focus time: ${payload.focusedMinutes} minutes`,
         `Sessions joined: ${payload.sessionsJoined}`,
+        `Task Scheduler done: ${payload.completedTaskItems}`,
+        `Daily tasks done: ${payload.completedDailyTasks}`,
       ];
-      if (Array.isArray(payload.notes) && payload.notes.length) {
-        lines.push("Notes:");
-        payload.notes.forEach((note: string) => lines.push(`- ${note}`));
-      }
       return { title: "Weekly summary", text: lines.join("\n") };
     }
     default:
@@ -761,20 +752,7 @@ function isUuid(value: string) {
   );
 }
 
-type RefusalKind = "personal" | "admin";
-
-const PERSONAL_PATTERNS: RegExp[] = [
-  /\bmy\s+(stats|statistics|tasks?|habits?|minutes?|streak|profile|account|data|activity|history|sessions?)\b/i,
-  /\bmy\s+(focus|study|timer|planner|goals?)\b/i,
-  /\bhow\s+many\s+(minutes?|hours?)\b.*\b(i|me|my)\b/i,
-  /\b(i|me|my)\s+(spent|studied|focused|tracked)\b/i,
-  /\b(my|me)\s+(email|e-mail|phone|number|address)\b/i,
-  /\b(email|e-mail)\b.*\b(my|me|mine|feruzbek)\b/i,
-  /(^|\s)мо[йяеи]\s+(статистик|задач|привыч|минут|сер(ия|ии)|стрик|профил|аккаунт|данн|активн|истори)/i,
-  /(^|\s)сколько\s+(минут|часов).*(я|мне|мой|моя|моё|мои)/i,
-  /(^|\s)mening\s+(statistika|vazif|odat|daqiq|streak|profil|hisob|ma'lumot|malumot|faoliyat|tarix)/i,
-  /(^|\s)necha\s+(daqiq|soat).*(men(ing|)?)/i,
-];
+type RefusalKind = "admin";
 
 const ADMIN_PATTERNS: RegExp[] = [
   /\badmin\b/i,
@@ -895,7 +873,6 @@ const FOCUS_SQUAD_PATTERNS: RegExp[] = [
 ];
 
 function classifyRefusal(input: string): RefusalKind | null {
-  if (matchesAny(PERSONAL_PATTERNS, input)) return "personal";
   if (matchesAny(ADMIN_PATTERNS, input)) return "admin";
   return null;
 }

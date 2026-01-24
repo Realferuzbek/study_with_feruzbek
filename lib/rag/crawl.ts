@@ -238,6 +238,8 @@ async function indexLocalDocs(): Promise<{
       const raw = await fs.readFile(filePath, "utf8");
       const cleaned = stripFrontMatter(raw);
       const title = extractMarkdownTitle(cleaned, filename);
+      const slug = filename.replace(/\.md$/i, "");
+      const baseUrl = `local://content/ai/${slug}`;
       const text = cleaned.replace(/\s+/g, " ").trim();
       const chunks = chunk(text);
       if (!chunks.length) continue;
@@ -245,10 +247,10 @@ async function indexLocalDocs(): Promise<{
       const embeddings = await embedBatch(chunks);
       const now = new Date().toISOString();
       const payloads = embeddings.map((vec, i) => ({
-        id: `local://${filename}#${i}`,
+        id: `${baseUrl}#${i}`,
         vector: vec,
         metadata: {
-          url: `local://${filename}#${i}`,
+          url: baseUrl,
           title,
           chunk: chunks[i],
           chunkIndex: i,

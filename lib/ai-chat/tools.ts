@@ -1,27 +1,40 @@
 import { DateTime } from "luxon";
-import { supabaseAdmin } from "@/lib/supabaseServer";
-import { loadLatestLeaderboards } from "@/lib/leaderboard/loadLatest";
+
+import { withCanonicalRanks } from "@/lib/leaderboard/entries";
 import { getTodayMotivationSnapshot } from "@/lib/motivation/today";
+import { supabaseAdmin } from "@/lib/supabaseServer";
+import { todayTashkent } from "@/lib/tz";
+import type { LeaderboardEntry } from "@/types/leaderboard";
 
 const TASHKENT_TZ = "Asia/Tashkent";
-const DEFAULT_MAX_PARTICIPANTS = 3;
+const JOIN_OPEN_MINUTES = 10;
+const JOIN_CLOSE_MINUTES = 5;
+const SESSION_SCAN_HOURS = 24;
+const DEFAULT_HOST_NAME = "Focus Host";
 
-export type LiveSessionSummary = {
+export type TodaysMantraPublicResult = {
+  dateLabel: string;
+  quoteIndex: number;
+  text: string;
+};
+
+export type LiveSessionPublic = {
+  id: string;
+  topic: string | null;
+  mode: string | null;
   startsAt: string;
   endsAt: string;
-  title: string | null;
-  topic: string | null;
-  participantCount: number;
-  maxParticipants: number;
+  creatorDisplayName: string | null;
 };
 
-export type LiveSessionsResult = {
-  live: LiveSessionSummary[];
-  upcoming: LiveSessionSummary[];
+export type LiveSessionsPublicResult = {
+  sessions: LiveSessionPublic[];
 };
 
-export type LeaderboardTopResult = {
-  scope: string | null;
+export type LeaderboardTopNowResult = {
+  available: boolean;
+  date: string;
+  scope: string;
   periodStart: string | null;
   periodEnd: string | null;
   entries: Array<{
@@ -29,6 +42,7 @@ export type LeaderboardTopResult = {
     username: string;
     minutes: number | null;
   }>;
+  message?: string;
 };
 
 export type TaskSummary = {
@@ -36,10 +50,9 @@ export type TaskSummary = {
   status: string;
   dueDate: string | null;
   dueAt: string | null;
-  dueStartDate: string | null;
-  dueEndDate: string | null;
   scheduledStart: string | null;
   scheduledEnd: string | null;
+  source: "scheduler" | "daily";
 };
 
 export type TasksTodayResult = {
@@ -48,140 +61,179 @@ export type TasksTodayResult = {
 };
 
 export type NextSessionResult = {
+  id: string;
   startsAt: string;
   endsAt: string;
-  title: string | null;
   topic: string | null;
-  status: string | null;
+  mode: string | null;
 };
 
-export type StreakResult =
-  | {
-      available: true;
-      current: number;
-      longest: number;
-      updatedAt: string | null;
-    }
-  | { available: false; message: string };
+export type StreakResult = {
+  current: number;
+  longest: number;
+  updatedAt: string | null;
+};
 
 export type WeekSummaryResult = {
   rangeStart: string;
   rangeEnd: string;
   completedTasks: number;
-  focusedMinutes: number | null;
+  completedTaskItems: number;
+  completedDailyTasks: number;
   sessionsJoined: number;
-  notes: string[];
+  focusedMinutes: number;
 };
 
-export async function getTodaysMantra() {
+type HostProfile = {
+  id: string;
+  display_name?: string | null;
+  name?: string | null;
+};
+
+type FocusSessionRow = {
+  id: string;
+  creator_user_id?: string | null;
+  starts_at: string;
+  ends_at?: string | null;
+  duration_minutes?: number | null;
+  status?: string | null;
+  task?: string | null;
+  title?: string | null;
+};
+
+export async function getTodaysMantraPublic(): Promise<TodaysMantraPublicResult> {
   const snapshot = getTodayMotivationSnapshot();
   return {
-    quote: snapshot.quote,
-    index: snapshot.index,
     dateLabel: snapshot.dateLabel,
-    dateISO: snapshot.dateISO,
+    quoteIndex: snapshot.index + 1,
+    text: snapshot.quote,
   };
 }
 
-export async function getLiveSessionsPublic(): Promise<LiveSessionsResult> {
-  const now = new Date();
-  const nowMs = now.getTime();
-  const sb = supabaseAdmin();
+export async function getLiveSessionsPublic(
+  now: Date = new Date(),
+): Promise<LiveSessionsPublicResult> {
+  const nowDate = now instanceof Date ? now : new Date(now);
+  const nowMs = nowDate.getTime();
+  if (!Number.isFinite(nowMs)) {
+    return { sessions: [] };
+  }
 
+  const scanStart = new Date(nowMs - SESSION_SCAN_HOURS * 60 * 60 * 1000);
+  const scanEnd = new Date(nowMs + SESSION_SCAN_HOURS * 60 * 60 * 1000);
+
+  const sb = supabaseAdmin();
   const { data, error } = await sb
     .from("focus_sessions")
     .select(
-      "id, starts_at, ends_at, duration_minutes, status, title, task, max_participants",
+      "id, creator_user_id, starts_at, ends_at, duration_minutes, status, task, title",
     )
-    .in("status", ["active", "scheduled"])
+    .gte("starts_at", scanStart.toISOString())
+    .lte("starts_at", scanEnd.toISOString())
+    .in("status", ["scheduled", "active"])
     .order("starts_at", { ascending: true })
-    .limit(40);
+    .limit(80);
 
   if (error) {
     console.error("[ai-chat] live sessions lookup failed", error);
-    return { live: [], upcoming: [] };
+    return { sessions: [] };
   }
 
-  const sessions = data ?? [];
-  const sessionIds = sessions.map((row) => row.id);
-  const participantCounts = new Map<string, number>();
+  const sessions = (data ?? []) as FocusSessionRow[];
+  const hostIds = Array.from(
+    new Set(
+      sessions
+        .map((row) => row.creator_user_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+  const hostMap = new Map<string, HostProfile>();
 
-  if (sessionIds.length) {
-    const { data: participants, error: participantError } = await sb
-      .from("focus_session_participants")
-      .select("session_id")
-      .in("session_id", sessionIds);
-
-    if (!participantError) {
-      participants?.forEach((row) => {
-        const current = participantCounts.get(row.session_id) ?? 0;
-        participantCounts.set(row.session_id, current + 1);
+  if (hostIds.length > 0) {
+    const { data: hosts, error: hostError } = await sb
+      .from("users")
+      .select("id, display_name, name")
+      .in("id", hostIds);
+    if (hostError) {
+      console.error("[ai-chat] host lookup failed", hostError);
+    } else {
+      (hosts ?? []).forEach((row) => {
+        if (row?.id) hostMap.set(row.id, row);
       });
     }
   }
 
-  const live: LiveSessionSummary[] = [];
-  const upcoming: LiveSessionSummary[] = [];
+  const liveSessions: LiveSessionPublic[] = [];
 
   sessions.forEach((row) => {
     const startsAt = new Date(row.starts_at);
     if (Number.isNaN(startsAt.valueOf())) return;
-    const endsAt = row.ends_at
-      ? new Date(row.ends_at)
-      : new Date(
-          startsAt.getTime() + Number(row.duration_minutes ?? 0) * 60_000,
-        );
-    if (Number.isNaN(endsAt.valueOf())) return;
-    if (endsAt.getTime() < nowMs) return;
+    const endsAt = resolveEndsAt(startsAt, row.ends_at, row.duration_minutes);
+    if (!endsAt) return;
 
-    const summary: LiveSessionSummary = {
+    const joinOpenAt = new Date(
+      startsAt.getTime() - JOIN_OPEN_MINUTES * 60 * 1000,
+    );
+    const joinCloseAt = new Date(
+      endsAt.getTime() + JOIN_CLOSE_MINUTES * 60 * 1000,
+    );
+
+    if (nowDate < joinOpenAt || nowDate > joinCloseAt) return;
+
+    const hostProfile = hostMap.get(row.creator_user_id ?? "") ?? null;
+    liveSessions.push({
+      id: row.id,
+      topic: row.title ?? row.task ?? null,
+      mode: row.task ?? null,
       startsAt: startsAt.toISOString(),
       endsAt: endsAt.toISOString(),
-      title: row.title ?? row.task ?? null,
-      topic: row.task ?? null,
-      participantCount: participantCounts.get(row.id) ?? 0,
-      maxParticipants: row.max_participants ?? DEFAULT_MAX_PARTICIPANTS,
-    };
-
-    const isLive =
-      row.status === "active" ||
-      (startsAt.getTime() <= nowMs && endsAt.getTime() > nowMs);
-    if (isLive) {
-      live.push(summary);
-    } else if (startsAt.getTime() > nowMs) {
-      upcoming.push(summary);
-    }
+      creatorDisplayName: resolveHostDisplayName(hostProfile),
+    });
   });
 
-  live.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
-  upcoming.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
-
-  return { live, upcoming };
+  liveSessions.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+  return { sessions: liveSessions };
 }
 
-export async function getLeaderboardTopNowPublic(): Promise<LeaderboardTopResult> {
+export async function getLeaderboardTopNowPublic(): Promise<LeaderboardTopNowResult> {
+  const date = todayTashkent();
+  const sb = supabaseAdmin();
+
   try {
-    const snapshots = await loadLatestLeaderboards();
-    const preferredScopes = ["day", "week", "month"] as const;
-    let selected =
-      snapshots.day ?? snapshots.week ?? snapshots.month ?? null;
-    if (!selected) {
-      for (const scope of preferredScopes) {
-        if (snapshots[scope]) {
-          selected = snapshots[scope];
-          break;
-        }
-      }
+    const { data, error } = await sb
+      .from("leaderboards")
+      .select("scope, period_start, period_end, posted_at, entries")
+      .eq("scope", "day")
+      .lte("period_start", date)
+      .gte("period_end", date)
+      .order("posted_at", { ascending: false })
+      .order("period_end", { ascending: false })
+      .limit(1);
+
+    if (error || !data?.length) {
+      if (error) console.error("[ai-chat] leaderboard lookup failed", error);
+      return {
+        available: false,
+        date,
+        scope: "day",
+        periodStart: null,
+        periodEnd: null,
+        entries: [],
+        message: "not available yet",
+      };
     }
 
-    if (!selected) {
-      return { scope: null, periodStart: null, periodEnd: null, entries: [] };
-    }
+    const row = data[0] as {
+      scope: string | null;
+      period_start: string | null;
+      period_end: string | null;
+      entries: LeaderboardEntry[] | null;
+    };
 
-    const sorted = [...(selected.entries ?? [])].sort(
-      (a, b) => a.rank - b.rank,
-    );
-    const top = sorted.slice(0, 3).map((entry) => ({
+    const entries = Array.isArray(row.entries)
+      ? withCanonicalRanks(row.entries)
+      : [];
+    const top = entries.slice(0, 3).map((entry) => ({
       rank: entry.rank,
       username: entry.username,
       minutes: Number.isFinite(entry.minutes)
@@ -189,15 +241,37 @@ export async function getLeaderboardTopNowPublic(): Promise<LeaderboardTopResult
         : entry.minutes ?? null,
     }));
 
+    if (!top.length) {
+      return {
+        available: false,
+        date,
+        scope: row.scope ?? "day",
+        periodStart: row.period_start ?? null,
+        periodEnd: row.period_end ?? null,
+        entries: [],
+        message: "not available yet",
+      };
+    }
+
     return {
-      scope: selected.scope ?? null,
-      periodStart: selected.period_start ?? null,
-      periodEnd: selected.period_end ?? null,
+      available: true,
+      date,
+      scope: row.scope ?? "day",
+      periodStart: row.period_start ?? null,
+      periodEnd: row.period_end ?? null,
       entries: top,
     };
   } catch (error) {
     console.error("[ai-chat] leaderboard top lookup failed", error);
-    return { scope: null, periodStart: null, periodEnd: null, entries: [] };
+    return {
+      available: false,
+      date,
+      scope: "day",
+      periodStart: null,
+      periodEnd: null,
+      entries: [],
+      message: "not available yet",
+    };
   }
 }
 
@@ -211,105 +285,66 @@ export async function getMyTasksToday(
   const endIso = dayEnd.toUTC().toISO();
 
   const sb = supabaseAdmin();
-  const { data, error } = await sb
-    .from("task_items")
-    .select(
-      "title,status,due_date,due_at,due_start_date,due_end_date,scheduled_start,scheduled_end",
-    )
-    .eq("user_id", userId)
-    .or(
-      [
-        `due_date.eq.${dateKey}`,
-        `and(due_start_date.lte.${dateKey},due_end_date.gte.${dateKey})`,
-        `and(due_start_date.eq.${dateKey},due_end_date.is.null)`,
-        `and(due_end_date.eq.${dateKey},due_start_date.is.null)`,
-        `and(due_at.gte.${startIso},due_at.lte.${endIso})`,
-        `and(scheduled_start.gte.${startIso},scheduled_start.lte.${endIso})`,
-      ].join(","),
-    )
-    .order("scheduled_start", { ascending: true, nullsFirst: false })
-    .order("due_at", { ascending: true, nullsFirst: false });
+  const schedulerTasks = await fetchSchedulerTasks(
+    sb,
+    userId,
+    dateKey,
+    startIso,
+    endIso,
+  );
+  const dailyTasks = await fetchLegacyDailyTasks(sb, userId, dateKey);
 
-  if (error) {
-    console.error("[ai-chat] tasks today lookup failed", error);
-    return { date: dateKey, tasks: [] };
-  }
-
-  const tasks = (data ?? []).map((row) => ({
-    title: row.title,
-    status: row.status ?? "planned",
-    dueDate: row.due_date ?? null,
-    dueAt: row.due_at ?? null,
-    dueStartDate: row.due_start_date ?? null,
-    dueEndDate: row.due_end_date ?? null,
-    scheduledStart: row.scheduled_start ?? null,
-    scheduledEnd: row.scheduled_end ?? null,
-  }));
-
-  return { date: dateKey, tasks };
+  return { date: dateKey, tasks: [...schedulerTasks, ...dailyTasks] };
 }
 
 export async function getMyNextBookedSession(
   userId: string,
+  now: Date = new Date(),
 ): Promise<NextSessionResult | null> {
+  const nowIso = now.toISOString();
   const sb = supabaseAdmin();
-  const nowIso = new Date().toISOString();
 
-  const [{ data: created }, { data: participantRows }] = await Promise.all([
-    sb
-      .from("focus_sessions")
-      .select(
-        "id, starts_at, ends_at, duration_minutes, status, title, task",
-      )
-      .eq("creator_user_id", userId)
-      .gte("starts_at", nowIso)
-      .in("status", ["active", "scheduled"])
-      .order("starts_at", { ascending: true })
-      .limit(1),
-    sb
+  try {
+    const { data, error } = await sb
       .from("focus_session_participants")
-      .select("session_id")
-      .eq("user_id", userId),
-  ]);
-
-  let participantSession: any = null;
-  if (participantRows?.length) {
-    const sessionIds = participantRows.map((row) => row.session_id);
-    const { data: sessions } = await sb
-      .from("focus_sessions")
       .select(
-        "id, starts_at, ends_at, duration_minutes, status, title, task",
+        "session_id, focus_sessions ( id, starts_at, ends_at, duration_minutes, status, task, title )",
       )
-      .in("id", sessionIds)
-      .gte("starts_at", nowIso)
-      .in("status", ["active", "scheduled"])
-      .order("starts_at", { ascending: true })
+      .eq("user_id", userId)
+      .gte("focus_sessions.starts_at", nowIso)
+      .in("focus_sessions.status", ["scheduled", "active"])
+      .order("focus_sessions.starts_at", { ascending: true })
       .limit(1);
-    participantSession = sessions?.[0] ?? null;
-  }
 
-  const createdSession = created?.[0] ?? null;
-  const nextSession = pickSoonestSession(createdSession, participantSession);
-  if (!nextSession) return null;
+    if (error) {
+      console.error("[ai-chat] next session lookup failed", error);
+      return null;
+    }
 
-  const startsAt = new Date(nextSession.starts_at);
-  const endsAt = nextSession.ends_at
-    ? new Date(nextSession.ends_at)
-    : new Date(
-        startsAt.getTime() +
-          Number(nextSession.duration_minutes ?? 0) * 60_000,
-      );
-  if (Number.isNaN(startsAt.valueOf()) || Number.isNaN(endsAt.valueOf())) {
+    const row = data?.[0];
+    const session = (row as any)?.focus_sessions as FocusSessionRow | null;
+    if (!session) return null;
+
+    const startsAt = new Date(session.starts_at);
+    if (Number.isNaN(startsAt.valueOf())) return null;
+    const endsAt = resolveEndsAt(
+      startsAt,
+      session.ends_at,
+      session.duration_minutes,
+    );
+    if (!endsAt) return null;
+
+    return {
+      id: session.id,
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+      topic: session.title ?? session.task ?? null,
+      mode: session.task ?? null,
+    };
+  } catch (error) {
+    console.error("[ai-chat] next session lookup failed", error);
     return null;
   }
-
-  return {
-    startsAt: startsAt.toISOString(),
-    endsAt: endsAt.toISOString(),
-    title: nextSession.title ?? nextSession.task ?? null,
-    topic: nextSession.task ?? null,
-    status: nextSession.status ?? null,
-  };
 }
 
 export async function getMyStreak(userId: string): Promise<StreakResult> {
@@ -320,18 +355,15 @@ export async function getMyStreak(userId: string): Promise<StreakResult> {
       .select("current_streak,longest_streak,updated_at")
       .eq("user_id", userId)
       .maybeSingle();
-    if (error) {
-      throw error;
-    }
+    if (error) throw error;
     return {
-      available: true,
       current: Number(data?.current_streak ?? 0),
       longest: Number(data?.longest_streak ?? 0),
       updatedAt: data?.updated_at ?? null,
     };
   } catch (error) {
-    console.warn("[ai-chat] streak lookup unavailable", error);
-    return { available: false, message: "not available yet" };
+    console.warn("[ai-chat] streak lookup failed", error);
+    return { current: 0, longest: 0, updatedAt: null };
   }
 }
 
@@ -339,39 +371,103 @@ export async function getMyWeekSummary(
   userId: string,
 ): Promise<WeekSummaryResult> {
   const now = DateTime.now().setZone(TASHKENT_TZ);
-  const rangeStart = now.minus({ days: 7 }).startOf("day");
+  const rangeStart = now.startOf("week");
   const rangeEnd = now.endOf("day");
   const startIso = rangeStart.toUTC().toISO();
   const endIso = rangeEnd.toUTC().toISO();
+  const startDate = rangeStart.toISODate() ?? "";
+  const endDate = rangeEnd.toISODate() ?? "";
 
   const sb = supabaseAdmin();
 
-  const [completedTasksCount, sessionsJoinedCount, focusMinutes] =
-    await Promise.all([
-      fetchCompletedTaskCount(sb, userId, startIso, endIso),
-      fetchSessionsJoinedCount(sb, userId, startIso, endIso),
-      fetchFocusMinutes(sb, userId, rangeStart.toMillis(), rangeEnd.toMillis()),
-    ]);
-
-  const notes = [
-    `Completed tasks: ${completedTasksCount}`,
-    focusMinutes === null
-      ? "Focus time: not available yet"
-      : `Focus time: ${focusMinutes} minutes`,
-    `Sessions joined: ${sessionsJoinedCount}`,
-  ];
+  const [taskItemCount, legacyTaskCount, sessionStats] = await Promise.all([
+    fetchCompletedTaskItemCount(sb, userId, startIso, endIso),
+    fetchLegacyCompletedTaskCount(sb, userId, startDate, endDate),
+    fetchSessionStats(sb, userId, startIso, endIso),
+  ]);
 
   return {
-    rangeStart: rangeStart.toFormat("yyyy-LL-dd"),
-    rangeEnd: rangeEnd.toFormat("yyyy-LL-dd"),
-    completedTasks: completedTasksCount,
-    focusedMinutes: focusMinutes,
-    sessionsJoined: sessionsJoinedCount,
-    notes,
+    rangeStart: startDate,
+    rangeEnd: endDate,
+    completedTasks: taskItemCount + legacyTaskCount,
+    completedTaskItems: taskItemCount,
+    completedDailyTasks: legacyTaskCount,
+    sessionsJoined: sessionStats.sessionsJoined,
+    focusedMinutes: sessionStats.focusedMinutes,
   };
 }
 
-async function fetchCompletedTaskCount(
+async function fetchSchedulerTasks(
+  sb: ReturnType<typeof supabaseAdmin>,
+  userId: string,
+  dateKey: string,
+  startIso: string | null,
+  endIso: string | null,
+): Promise<TaskSummary[]> {
+  if (!startIso || !endIso) return [];
+
+  const { data, error } = await sb
+    .from("task_items")
+    .select(
+      "title,status,due_date,due_at,scheduled_start,scheduled_end",
+    )
+    .eq("user_id", userId)
+    .or(
+      [
+        `due_date.eq.${dateKey}`,
+        `and(due_at.gte.${startIso},due_at.lte.${endIso})`,
+        `and(scheduled_start.gte.${startIso},scheduled_start.lte.${endIso})`,
+        "status.eq.in_progress",
+      ].join(","),
+    )
+    .order("scheduled_start", { ascending: true, nullsFirst: false })
+    .order("due_at", { ascending: true, nullsFirst: false });
+
+  if (error) {
+    console.error("[ai-chat] tasks today lookup failed", error);
+    return [];
+  }
+
+  return (data ?? []).map((row) => ({
+    title: row.title ?? "Untitled task",
+    status: row.status ?? "planned",
+    dueDate: row.due_date ?? null,
+    dueAt: row.due_at ?? null,
+    scheduledStart: row.scheduled_start ?? null,
+    scheduledEnd: row.scheduled_end ?? null,
+    source: "scheduler" as const,
+  }));
+}
+
+async function fetchLegacyDailyTasks(
+  sb: ReturnType<typeof supabaseAdmin>,
+  userId: string,
+  dateKey: string,
+): Promise<TaskSummary[]> {
+  const { data, error } = await sb
+    .from("tasks")
+    .select("id, content, is_done, for_date")
+    .eq("user_id", userId)
+    .eq("for_date", dateKey);
+
+  if (error) {
+    console.error("[ai-chat] legacy tasks lookup failed", error);
+    const fallback = await fetchLegacyTasksFallback(sb, userId, dateKey);
+    return fallback;
+  }
+
+  return (data ?? []).map((row) => ({
+    title: row.content ?? "Daily task",
+    status: row.is_done ? "done" : "pending",
+    dueDate: row.for_date ?? dateKey,
+    dueAt: null,
+    scheduledStart: null,
+    scheduledEnd: null,
+    source: "daily" as const,
+  }));
+}
+
+async function fetchCompletedTaskItemCount(
   sb: ReturnType<typeof supabaseAdmin>,
   userId: string,
   startIso: string | null,
@@ -391,66 +487,170 @@ async function fetchCompletedTaskCount(
   return count ?? 0;
 }
 
-async function fetchSessionsJoinedCount(
+async function fetchLegacyCompletedTaskCount(
   sb: ReturnType<typeof supabaseAdmin>,
   userId: string,
-  startIso: string | null,
-  endIso: string | null,
+  startDate: string,
+  endDate: string,
 ) {
-  if (!startIso || !endIso) return 0;
+  if (!startDate || !endDate) return 0;
   const { count, error } = await sb
-    .from("focus_session_participants")
+    .from("tasks")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId)
-    .gte("joined_at", startIso)
-    .lte("joined_at", endIso);
+    .eq("is_done", true)
+    .gte("for_date", startDate)
+    .lte("for_date", endDate);
   if (error) {
-    console.error("[ai-chat] sessions joined count failed", error);
-    return 0;
+    console.error("[ai-chat] legacy task count failed", error);
+    return fetchLegacyCompletedTaskCountFallback(
+      sb,
+      userId,
+      startDate,
+      endDate,
+    );
   }
   return count ?? 0;
 }
 
-async function fetchFocusMinutes(
+async function fetchLegacyTasksFallback(
   sb: ReturnType<typeof supabaseAdmin>,
   userId: string,
-  rangeStartMs: number,
-  rangeEndMs: number,
-): Promise<number | null> {
-  try {
-    const { data, error } = await sb
-      .from("usage_sessions")
-      .select("started_at,last_seen_at")
-      .eq("user_id", userId)
-      .gte("last_seen_at", new Date(rangeStartMs).toISOString())
-      .lte("started_at", new Date(rangeEndMs).toISOString());
-    if (error) throw error;
-
-    let totalMinutes = 0;
-    (data ?? []).forEach((row) => {
-      const start = new Date(row.started_at).getTime();
-      const end = new Date(row.last_seen_at).getTime();
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start)
-        return;
-      const clampedStart = Math.max(start, rangeStartMs);
-      const clampedEnd = Math.min(end, rangeEndMs);
-      if (clampedEnd <= clampedStart) return;
-      totalMinutes += (clampedEnd - clampedStart) / 60_000;
-    });
-    return Math.round(totalMinutes);
-  } catch (error) {
-    console.warn("[ai-chat] focus minutes unavailable", error);
-    return null;
+  dateKey: string,
+) {
+  const { data, error } = await sb
+    .from("tasks")
+    .select("id, content, for_date")
+    .eq("user_id", userId)
+    .eq("for_date", dateKey);
+  if (error) {
+    console.error("[ai-chat] legacy tasks fallback failed", error);
+    return [];
   }
+  const taskIds = (data ?? []).map((row) => row.id).filter(Boolean);
+  const reviewMap = await fetchTaskReviewStatusMap(sb, taskIds);
+  return (data ?? []).map((row) => ({
+    title: row.content ?? "Daily task",
+    status: reviewMap.get(row.id) === "completed" ? "done" : "pending",
+    dueDate: row.for_date ?? dateKey,
+    dueAt: null,
+    scheduledStart: null,
+    scheduledEnd: null,
+    source: "daily" as const,
+  }));
 }
 
-function pickSoonestSession(a: any, b: any) {
-  if (!a && !b) return null;
-  if (a && !b) return a;
-  if (b && !a) return b;
-  const aStart = new Date(a.starts_at).getTime();
-  const bStart = new Date(b.starts_at).getTime();
-  if (!Number.isFinite(aStart)) return b;
-  if (!Number.isFinite(bStart)) return a;
-  return aStart <= bStart ? a : b;
+async function fetchLegacyCompletedTaskCountFallback(
+  sb: ReturnType<typeof supabaseAdmin>,
+  userId: string,
+  startDate: string,
+  endDate: string,
+) {
+  const { data, error } = await sb
+    .from("tasks")
+    .select("id, for_date")
+    .eq("user_id", userId)
+    .gte("for_date", startDate)
+    .lte("for_date", endDate);
+  if (error) {
+    console.error("[ai-chat] legacy task fallback failed", error);
+    return 0;
+  }
+  const taskIds = (data ?? []).map((row) => row.id).filter(Boolean);
+  if (!taskIds.length) return 0;
+  const reviewMap = await fetchTaskReviewStatusMap(sb, taskIds);
+  let count = 0;
+  taskIds.forEach((id) => {
+    if (reviewMap.get(id) === "completed") count += 1;
+  });
+  return count;
+}
+
+async function fetchTaskReviewStatusMap(
+  sb: ReturnType<typeof supabaseAdmin>,
+  taskIds: string[],
+) {
+  const map = new Map<string, string>();
+  if (!taskIds.length) return map;
+  const { data, error } = await sb
+    .from("task_reviews")
+    .select("task_id, status")
+    .in("task_id", taskIds);
+  if (error) {
+    console.error("[ai-chat] task review lookup failed", error);
+    return map;
+  }
+  (data ?? []).forEach((row) => {
+    if (row?.task_id) {
+      map.set(row.task_id, row.status ?? "");
+    }
+  });
+  return map;
+}
+
+async function fetchSessionStats(
+  sb: ReturnType<typeof supabaseAdmin>,
+  userId: string,
+  startIso: string | null,
+  endIso: string | null,
+): Promise<{ sessionsJoined: number; focusedMinutes: number }> {
+  if (!startIso || !endIso) return { sessionsJoined: 0, focusedMinutes: 0 };
+
+  const { data, error } = await sb
+    .from("focus_session_participants")
+    .select(
+      "session_id, focus_sessions ( starts_at, ends_at, duration_minutes, status )",
+    )
+    .eq("user_id", userId)
+    .gte("focus_sessions.starts_at", startIso)
+    .lte("focus_sessions.starts_at", endIso);
+
+  if (error) {
+    console.error("[ai-chat] weekly sessions lookup failed", error);
+    return { sessionsJoined: 0, focusedMinutes: 0 };
+  }
+
+  let sessionsJoined = 0;
+  let focusedMinutes = 0;
+
+  (data ?? []).forEach((row) => {
+    const session = (row as any)?.focus_sessions as FocusSessionRow | null;
+    if (!session) return;
+    if (session.status === "cancelled") return;
+    sessionsJoined += 1;
+    const duration = Number(session.duration_minutes ?? 0);
+    if (Number.isFinite(duration) && duration > 0) {
+      focusedMinutes += duration;
+      return;
+    }
+    const startsAt = new Date(session.starts_at);
+    const endsAt = session.ends_at ? new Date(session.ends_at) : null;
+    if (endsAt && !Number.isNaN(startsAt.valueOf()) && !Number.isNaN(endsAt.valueOf())) {
+      const diff = (endsAt.getTime() - startsAt.getTime()) / 60_000;
+      if (diff > 0) focusedMinutes += diff;
+    }
+  });
+
+  return { sessionsJoined, focusedMinutes: Math.round(focusedMinutes) };
+}
+
+function resolveHostDisplayName(profile: HostProfile | null) {
+  const name = profile?.display_name ?? profile?.name ?? null;
+  return name && name.trim().length > 0 ? name : DEFAULT_HOST_NAME;
+}
+
+function resolveEndsAt(
+  startsAt: Date,
+  endsAtRaw?: string | null,
+  durationMinutes?: number | null,
+) {
+  if (endsAtRaw) {
+    const parsed = new Date(endsAtRaw);
+    if (!Number.isNaN(parsed.valueOf())) return parsed;
+  }
+  const duration = Number.isFinite(durationMinutes)
+    ? Number(durationMinutes)
+    : null;
+  if (!duration || duration <= 0) return null;
+  return new Date(startsAt.getTime() + duration * 60_000);
 }
