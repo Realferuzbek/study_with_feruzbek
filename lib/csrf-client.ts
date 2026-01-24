@@ -86,6 +86,9 @@ export function csrfFetch(
   }
 
   const mergedInit: RequestInit = { ...init, headers };
+  if (!mergedInit.credentials) {
+    mergedInit.credentials = "same-origin";
+  }
   return fetch(input, mergedInit);
 }
 

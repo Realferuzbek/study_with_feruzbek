@@ -2,7 +2,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { createHmsAuthToken, createHmsManagementToken } from "@/lib/voice/hms";
+import {
+  createHmsAuthToken,
+  createHmsManagementToken,
+  getDefaultHmsRole,
+  resolveHmsRole,
+} from "@/lib/voice/hms";
 
 type TokenRequest = {
   userId?: unknown;
@@ -11,23 +16,11 @@ type TokenRequest = {
   role?: unknown;
 };
 
-type Role = "viewer" | "host" | "admin" | "peer";
-
-const ROLE_VALUES: Role[] = ["viewer", "host", "admin", "peer"];
-const DEFAULT_ROLE: Role = "viewer";
 const DEFAULT_TTL_SECONDS = 300;
 
 function readString(value: unknown) {
   if (typeof value !== "string") return "";
   return value.trim();
-}
-
-function parseRole(value: unknown): Role | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  return ROLE_VALUES.includes(normalized as Role)
-    ? (normalized as Role)
-    : null;
 }
 
 function nowInSeconds() {
@@ -133,7 +126,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const role = parseRole(payload.role) ?? DEFAULT_ROLE;
+  const requestedRole = readString(payload.role);
+  const role = requestedRole ? resolveHmsRole(requestedRole) : getDefaultHmsRole();
 
   const accessKey = process.env.HMS_APP_ACCESS_KEY;
   const secret = process.env.HMS_APP_SECRET;

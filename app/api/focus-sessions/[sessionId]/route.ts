@@ -99,6 +99,10 @@ export async function PATCH(req: NextRequest, context: RouteContext) {
   return cancelSession(req, context);
 }
 
+export async function POST(req: NextRequest, context: RouteContext) {
+  return cancelSession(req, context);
+}
+
 export async function DELETE(req: NextRequest, context: RouteContext) {
   return cancelSession(req, context);
 }

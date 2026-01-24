@@ -21,6 +21,7 @@ export type StudioBooking = {
   participantCount?: number;
   maxParticipants?: number;
   status?: StudioBookingStatus | string;
+  isOptimistic?: boolean;
 };
 
 type LiveStudioCalendar3DayProps = {
@@ -30,6 +31,7 @@ type LiveStudioCalendar3DayProps = {
   selectedBookingId?: string | null;
   onRangeChange?: (range: { from: Date; to: Date }) => void;
   notice?: string | null;
+  isLoading?: boolean;
   user?: {
     id?: string | null;
     name?: string | null;
@@ -141,6 +143,7 @@ export default function LiveStudioCalendar3Day({
   selectedBookingId,
   onRangeChange,
   notice,
+  isLoading = false,
   user,
   settings,
   focusSignal,
@@ -400,11 +403,18 @@ export default function LiveStudioCalendar3Day({
           </div>
         </div>
 
-        {notice ? (
-          <div className="inline-flex w-fit items-center gap-2 rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-500">
-            {notice}
-          </div>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          {notice ? (
+            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-500">
+              {notice}
+            </div>
+          ) : null}
+          {isLoading ? (
+            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 py-1 text-[11px] font-semibold text-[var(--studio-muted)]">
+              Refreshing...
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="grid grid-cols-[var(--studio-time-gutter-width)_1fr] border-b border-[var(--studio-border)] bg-[var(--studio-card)] text-[12px] text-[var(--studio-muted)]">
@@ -542,6 +552,8 @@ export default function LiveStudioCalendar3Day({
                   totalSlots={totalSlots}
                   participantCount={bookingItem.participantCount}
                   maxParticipants={bookingItem.maxParticipants}
+                  status={bookingItem.status}
+                  isOptimistic={bookingItem.isOptimistic}
                   isHost={Boolean(
                     bookingItem.hostId &&
                       user?.id &&
@@ -582,6 +594,8 @@ type CalendarBlockProps = {
   start: Date;
   end: Date;
   task: StudioTask;
+  status?: StudioBookingStatus | string;
+  isOptimistic?: boolean;
   user?: {
     id?: string | null;
     name?: string | null;
@@ -602,6 +616,8 @@ function CalendarBlock({
   start,
   end,
   task,
+  status,
+  isOptimistic = false,
   user,
   slotHeight,
   totalSlots,
@@ -627,6 +643,14 @@ function CalendarBlock({
   const top = startSlot * slotHeight;
   const initials = initialsFromUser(user?.name, user?.email);
 
+  const isCancelled = status === "cancelled";
+  const isCompleted = status === "completed";
+  const statusLabel = isCancelled
+    ? "Cancelled"
+    : isCompleted
+      ? "Ended"
+      : null;
+
   return (
     <div
       role={isDraft ? undefined : "button"}
@@ -648,7 +672,9 @@ function CalendarBlock({
       }
       className={`absolute left-2 right-2 rounded-2xl border border-[var(--studio-booking-border)] bg-[var(--studio-booking-bg)] px-2 py-2 text-xs text-[var(--studio-booking-text)] shadow-[0_12px_26px_rgba(15,23,42,0.12)] ${
         isDraft ? "pointer-events-none opacity-70" : "cursor-pointer"
-      } ${isSelected ? "ring-2 ring-[var(--studio-accent)]" : ""}`}
+      } ${isSelected ? "ring-2 ring-[var(--studio-accent)]" : ""} ${
+        isCancelled ? "opacity-55" : ""
+      }`}
       style={{ top, height }}
     >
       <div className="flex items-center gap-2">
@@ -682,9 +708,14 @@ function CalendarBlock({
           {participantCount}/{maxParticipants} participants
         </div>
       ) : null}
-      {isDraft ? (
+      {statusLabel ? (
+        <div className="mt-1 text-[10px] font-semibold text-rose-500">
+          {statusLabel}
+        </div>
+      ) : null}
+      {isOptimistic ? (
         <div className="mt-1 text-[10px] font-semibold text-[var(--studio-accent)]">
-          Draft session
+          Booking...
         </div>
       ) : null}
     </div>

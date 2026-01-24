@@ -162,6 +162,32 @@ export default function FocusmateSessionRoom({
       setJoining(true);
       setJoinError(null);
       try {
+        const storageKey = `focus-session-token:${sessionId}`;
+        let authToken: string | null = null;
+        if (typeof window !== "undefined") {
+          authToken = window.sessionStorage.getItem(storageKey);
+          if (authToken) {
+            window.sessionStorage.removeItem(storageKey);
+          }
+        }
+
+        const tryJoin = async (token: string) => {
+          await hmsActions.join({
+            userName: displayName,
+            authToken: token,
+          });
+        };
+
+        if (authToken) {
+          try {
+            await tryJoin(authToken);
+            return;
+          } catch (err) {
+            console.error("[focus sessions] join with cached token failed", err);
+            authToken = null;
+          }
+        }
+
         const res = await csrfFetch(
           `/api/focus-sessions/${sessionId}/token`,
           {
@@ -170,17 +196,38 @@ export default function FocusmateSessionRoom({
             body: JSON.stringify({}),
           },
         );
+        const text = await res.text().catch(() => "");
         if (!res.ok) {
-          const payload = await res.json().catch(() => null);
+          const payload = text
+            ? (() => {
+                try {
+                  return JSON.parse(text);
+                } catch {
+                  return null;
+                }
+              })()
+            : null;
           const message = payload?.error ?? "Unable to join session.";
+          console.error("[focus sessions] join failed", res.status, text);
           if (active) setJoinError(message);
           return;
         }
-        const payload = await res.json();
-        await hmsActions.join({
-          userName: displayName,
-          authToken: payload.token,
-        });
+        const payload = text
+          ? (() => {
+              try {
+                return JSON.parse(text);
+              } catch {
+                return null;
+              }
+            })()
+          : null;
+        const token = payload?.token;
+        if (!token) {
+          console.error("[focus sessions] join token missing", res.status, text);
+          if (active) setJoinError("Unable to join session.");
+          return;
+        }
+        await tryJoin(token);
       } catch (err) {
         console.error(err);
         if (active) setJoinError("Unable to join session.");

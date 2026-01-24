@@ -3,7 +3,6 @@
 import AvatarBadge from "@/components/AvatarBadge";
 import { CalendarDays, ChevronRight, ChevronsRight, Moon, Sun } from "lucide-react";
 import { useMemo, useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
 import type { StudioBooking } from "./LiveStudioCalendar3Day";
 import { TASK_OPTIONS } from "./liveStudioOptions";
 
@@ -20,6 +19,8 @@ type LiveStudioRightPanelProps = {
   selectedSession: StudioBooking | null;
   upcomingSession: StudioBooking | null;
   onCancelSession: (sessionId: string) => void;
+  onJoinSession: (session: StudioBooking) => void;
+  joiningSessionId?: string | null;
   collapsed: boolean;
   onCollapseChange: (next: boolean) => void;
 };
@@ -40,12 +41,13 @@ export default function LiveStudioRightPanel({
   selectedSession,
   upcomingSession,
   onCancelSession,
+  onJoinSession,
+  joiningSessionId,
   collapsed,
   onCollapseChange,
 }: LiveStudioRightPanelProps) {
   const [showSchedule, setShowSchedule] = useState(false);
   const [now, setNow] = useState(() => new Date());
-  const router = useRouter();
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 60 * 1000);
@@ -98,27 +100,37 @@ export default function LiveStudioRightPanel({
   const joinState = useMemo(() => {
     if (!focusedSession || !joinWindow) return null;
     if (focusedSession.status === "cancelled") {
-      return { label: "Session cancelled", disabled: true };
+      return { label: "Session cancelled", disabled: true, state: "cancelled" };
     }
     if (focusedSession.status === "completed") {
-      return { label: "Session ended", disabled: true };
+      return { label: "Session ended", disabled: true, state: "ended" };
+    }
+    const maxParticipants = focusedSession.maxParticipants ?? 3;
+    const participantCount = focusedSession.participantCount ?? 0;
+    if (participantCount >= maxParticipants) {
+      return { label: "Session full", disabled: true, state: "full" };
     }
     if (now < joinWindow.joinOpenAt) {
       return {
         label: `Join opens at ${formatTimeCompact(joinWindow.joinOpenAt)}`,
         disabled: true,
+        state: "closed",
       };
     }
     if (now > joinWindow.joinCloseAt) {
-      return { label: "Session ended", disabled: true };
+      return { label: "Session ended", disabled: true, state: "ended" };
     }
-    return { label: "Join session", disabled: false };
+    return { label: "Join session", disabled: false, state: "open" };
   }, [focusedSession, joinWindow, now]);
 
   const canCancel =
     isHost &&
     focusedSession?.status === "scheduled" &&
     now.getTime() < (focusedSession?.start?.getTime() ?? 0);
+
+  const isJoining = Boolean(
+    focusedSession?.id && joiningSessionId === focusedSession.id,
+  );
 
   if (collapsed) {
     return (
@@ -263,21 +275,28 @@ export default function LiveStudioRightPanel({
                 </span>
               </div>
 
-              <button
-                type="button"
-                disabled={joinState?.disabled ?? true}
-                onClick={() => {
-                  if (joinState?.disabled) return;
-                  router.push(`/feature/live/session/${focusedSession.id}`);
-                }}
-                className={`h-10 w-full rounded-xl text-sm font-semibold transition ${
-                  joinState?.disabled
-                    ? "cursor-not-allowed border border-[var(--studio-border)] bg-[var(--studio-card)] text-[var(--studio-muted)]"
-                    : "bg-[var(--studio-accent)] text-white shadow-[0_12px_26px_rgba(91,92,226,0.32)] hover:-translate-y-0.5"
-                }`}
-              >
-                {joinState?.label ?? "Join session"}
-              </button>
+              {joinState?.state === "cancelled" ||
+              joinState?.state === "ended" ? (
+                <div className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-card)] px-3 py-2 text-center text-sm font-semibold text-[var(--studio-muted)]">
+                  {joinState?.label ?? "Session unavailable"}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={(joinState?.disabled ?? true) || isJoining}
+                  onClick={() => {
+                    if (joinState?.disabled || !focusedSession) return;
+                    onJoinSession(focusedSession);
+                  }}
+                  className={`h-10 w-full rounded-xl text-sm font-semibold transition ${
+                    joinState?.disabled || isJoining
+                      ? "cursor-not-allowed border border-[var(--studio-border)] bg-[var(--studio-card)] text-[var(--studio-muted)]"
+                      : "bg-[var(--studio-accent)] text-white shadow-[0_12px_26px_rgba(91,92,226,0.32)] hover:-translate-y-0.5"
+                  }`}
+                >
+                  {isJoining ? "Joining..." : joinState?.label ?? "Join session"}
+                </button>
+              )}
 
               {canCancel ? (
                 <button

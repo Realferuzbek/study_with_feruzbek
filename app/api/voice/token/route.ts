@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseServer";
-import { createHmsAuthToken } from "@/lib/voice/hms";
+import { createHmsAuthToken, getDefaultHmsRole } from "@/lib/voice/hms";
 
 type TokenRequest = {
   roomId?: string;
@@ -72,11 +72,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const role = isAdmin
-    ? "admin"
-    : room.created_by === user.id
-      ? "host"
-      : "viewer";
+  const role = getDefaultHmsRole();
 
   const accessKey = process.env.HMS_APP_ACCESS_KEY;
   const secret = process.env.HMS_APP_SECRET;

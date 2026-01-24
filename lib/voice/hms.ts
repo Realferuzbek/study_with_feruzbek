@@ -4,6 +4,10 @@ import { createHmac, randomUUID } from "crypto";
 
 type JwtPayload = Record<string, unknown>;
 
+export type HmsRole = "viewer" | "host" | "admin" | "peer";
+
+const HMS_ROLE_VALUES: HmsRole[] = ["viewer", "host", "admin", "peer"];
+
 type JwtOptions = {
   secret: string;
   payload: JwtPayload;
@@ -51,7 +55,7 @@ export function createHmsAuthToken(params: {
   secret: string;
   roomId: string;
   userId: string;
-  role: "viewer" | "host" | "admin" | "peer";
+  role: HmsRole;
   ttlSeconds?: number;
 }) {
   const now = nowInSeconds();
@@ -69,6 +73,18 @@ export function createHmsAuthToken(params: {
     jti: randomUUID(),
   };
   return signJwt({ secret: params.secret, payload });
+}
+
+export function resolveHmsRole(value?: string | null): HmsRole {
+  if (!value) return "viewer";
+  const normalized = value.trim().toLowerCase();
+  return HMS_ROLE_VALUES.includes(normalized as HmsRole)
+    ? (normalized as HmsRole)
+    : "viewer";
+}
+
+export function getDefaultHmsRole(): HmsRole {
+  return resolveHmsRole(process.env.HMS_DEFAULT_ROLE ?? "viewer");
 }
 
 export function buildHmsRoomName(title: string, suffix?: string) {
