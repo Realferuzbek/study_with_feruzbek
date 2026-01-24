@@ -153,6 +153,32 @@ export async function POST(req: NextRequest) {
     maxSize = parsed;
   }
 
+  const sb = supabaseAdmin();
+  const { data: existingRooms, error: existingRoomError } = await sb
+    .from("live_voice_rooms")
+    .select("id")
+    .eq("created_by", user.id)
+    .eq("status", "active")
+    .limit(1);
+
+  if (existingRoomError) {
+    console.error("[voice rooms] active room lookup failed", existingRoomError);
+    return NextResponse.json(
+      { error: "Failed to check existing rooms" },
+      { status: 500 },
+    );
+  }
+
+  if (existingRooms && existingRooms.length > 0) {
+    return NextResponse.json(
+      {
+        error:
+          "You already have an active room. End it before creating a new one.",
+      },
+      { status: 409 },
+    );
+  }
+
   const accessKey = process.env.HMS_APP_ACCESS_KEY;
   const secret = process.env.HMS_APP_SECRET;
   if (!accessKey || !secret) {
@@ -203,7 +229,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const sb = supabaseAdmin();
   const { data: inserted, error } = await sb
     .from("live_voice_rooms")
     .insert({

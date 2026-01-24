@@ -309,7 +309,7 @@ export async function middleware(req: NextRequest) {
   let csrfTokenToSet: string | null = null;
 
   // For authenticated GETs, ensure a CSRF cookie is present (non-HttpOnly so client JS can read it)
-  if (!needsCsrf && method === "GET") {
+  if (!needsCsrf && method === "GET" && url.pathname !== "/api/csrf") {
     const existing = req.cookies.get(CSRF_COOKIE_NAME)?.value;
     if (!existing) {
       csrfTokenToSet = generateCsrfToken();

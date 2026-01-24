@@ -42,6 +42,11 @@ export function generateCsrfToken(): string {
   return bytesToHex(bytes);
 }
 
+// Backwards-compatible alias for newer imports.
+export function createCsrfToken(): string {
+  return generateCsrfToken();
+}
+
 // Constant-time compare without leaking timing information
 export function safeEqual(
   a: string | undefined,
