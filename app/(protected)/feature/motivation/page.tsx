@@ -84,7 +84,7 @@ export default async function MotivationVaultFeature() {
           </div>
         </section>
 
-        <section className="relative overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-r from-[#0c0f25]/90 to-[#0a0819]/90 p-6 text-sm text-white/75 shadow-[0_18px_55px_rgba(20,12,70,0.35)] md:p-8">
+        <section className="relative hidden overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-r from-[#0c0f25]/90 to-[#0a0819]/90 p-6 text-sm text-white/75 shadow-[0_18px_55px_rgba(20,12,70,0.35)] sm:block md:p-8">
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_10%_40%,rgba(255,255,255,0.08),transparent_38%),radial-gradient(circle_at_90%_20%,rgba(255,255,255,0.05),transparent_35%)]" />
           <div className="relative flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <h3 className="text-xl font-semibold text-white">

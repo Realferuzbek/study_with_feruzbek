@@ -7,7 +7,6 @@ import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import dynamicImport from "next/dynamic";
 import AvatarBadge from "@/components/AvatarBadge";
-import AuthEntryButtons from "@/components/AuthEntryButtons";
 import {
   getLanguageOptions,
   getTranslations,
@@ -175,11 +174,6 @@ export default async function DashboardPage() {
                   Browse as guest. Sign in to personalize.
                 </p>
               </div>
-              <AuthEntryButtons
-                callbackUrl="/dashboard"
-                size="md"
-                className="w-full flex-col items-stretch gap-3 sm:w-auto sm:flex-row sm:items-center"
-              />
             </div>
           </section>
         )}
