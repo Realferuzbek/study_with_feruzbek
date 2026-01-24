@@ -116,7 +116,7 @@ const RouterSchema = z.union([
 type ToolIntent = {
   name: ToolName;
   description: string;
-  examples: string[];
+  examples: readonly string[];
   requiresAuth: boolean;
 };
 
