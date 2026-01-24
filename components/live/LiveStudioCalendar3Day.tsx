@@ -6,19 +6,32 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import { TASK_OPTIONS, type StudioTask } from "./liveStudioOptions";
 
+export type StudioBookingStatus =
+  | "scheduled"
+  | "active"
+  | "cancelled"
+  | "completed";
+
 export type StudioBooking = {
   id: string;
   start: Date;
   end: Date;
   task: StudioTask;
+  hostId?: string | null;
+  participantCount?: number;
+  maxParticipants?: number;
+  status?: StudioBookingStatus | string;
 };
 
 type LiveStudioCalendar3DayProps = {
-  booking: StudioBooking | null;
-  onCreateBooking: (booking: StudioBooking) => boolean;
-  onBlockedBooking?: () => void;
+  bookings: StudioBooking[];
+  onCreateBooking: (booking: StudioBooking) => void;
+  onSelectBooking?: (bookingId: string) => void;
+  selectedBookingId?: string | null;
+  onRangeChange?: (range: { from: Date; to: Date }) => void;
   notice?: string | null;
   user?: {
+    id?: string | null;
     name?: string | null;
     email?: string | null;
     avatarUrl?: string | null;
@@ -34,7 +47,6 @@ const SLOT_MINUTES = 15;
 const START_HOUR = 0;
 const END_HOUR = 24;
 const SLOT_HEIGHT = 24;
-const MAX_DURATION_MINUTES = 120;
 const TIME_GUTTER_WIDTH = 60;
 const TIME_GUTTER_PADDING = 10;
 const DAY_SEPARATOR_THICKNESS = 1;
@@ -57,6 +69,12 @@ function startOfDay(date: Date) {
 function addDays(date: Date, days: number) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
+  return next;
+}
+
+function endOfDay(date: Date) {
+  const next = new Date(date);
+  next.setHours(23, 59, 59, 999);
   return next;
 }
 
@@ -117,9 +135,11 @@ function clamp(value: number, min: number, max: number) {
 }
 
 export default function LiveStudioCalendar3Day({
-  booking,
+  bookings,
   onCreateBooking,
-  onBlockedBooking,
+  onSelectBooking,
+  selectedBookingId,
+  onRangeChange,
   notice,
   user,
   settings,
@@ -127,7 +147,6 @@ export default function LiveStudioCalendar3Day({
 }: LiveStudioCalendar3DayProps) {
   const totalSlots = ((END_HOUR - START_HOUR) * 60) / SLOT_MINUTES;
   const totalHeight = totalSlots * SLOT_HEIGHT;
-  const maxSlots = MAX_DURATION_MINUTES / SLOT_MINUTES;
   const defaultSlots = Math.max(1, Math.round(settings.durationMinutes / 15));
 
   const [startDate, setStartDate] = useState(() => startOfDay(new Date()));
@@ -142,18 +161,33 @@ export default function LiveStudioCalendar3Day({
     [startDate],
   );
 
-  const bookingDayIndex = useMemo(() => {
-    if (!booking) return null;
-    const bookingDay = startOfDay(booking.start);
-    const diffMs = bookingDay.getTime() - startDate.getTime();
-    const diffDays = Math.round(diffMs / (24 * 60 * 60 * 1000));
-    return diffDays >= 0 && diffDays < 3 ? diffDays : null;
-  }, [booking, startDate]);
+  const bookingsByDay = useMemo(() => {
+    const grouped: StudioBooking[][] = [[], [], []];
+    bookings.forEach((bookingItem) => {
+      const bookingDay = startOfDay(bookingItem.start);
+      const diffMs = bookingDay.getTime() - startDate.getTime();
+      const diffDays = Math.round(diffMs / (24 * 60 * 60 * 1000));
+      if (diffDays >= 0 && diffDays < 3) {
+        grouped[diffDays].push(bookingItem);
+      }
+    });
+    grouped.forEach((items) =>
+      items.sort((a, b) => a.start.getTime() - b.start.getTime()),
+    );
+    return grouped;
+  }, [bookings, startDate]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60 * 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    onRangeChange?.({
+      from: startDate,
+      to: endOfDay(addDays(startDate, 2)),
+    });
+  }, [onRangeChange, startDate]);
 
   useEffect(() => {
     const scrollEl = scrollRef.current;
@@ -189,27 +223,19 @@ export default function LiveStudioCalendar3Day({
   const resolveRange = useCallback(
     (state: DragState) => {
       let startSlot = state.startSlot;
-      let endSlot = state.currentSlot;
-
-      if (!state.hasMoved) {
-        endSlot = startSlot + defaultSlots - 1;
-      } else {
+      if (state.hasMoved) {
         startSlot = Math.min(state.startSlot, state.currentSlot);
-        endSlot = Math.max(state.startSlot, state.currentSlot);
       }
-
-      if (endSlot - startSlot + 1 > maxSlots) {
-        endSlot = startSlot + maxSlots - 1;
-      }
+      let endSlot = startSlot + defaultSlots - 1;
 
       if (endSlot > totalSlots - 1) {
         endSlot = totalSlots - 1;
-        startSlot = Math.max(0, endSlot - maxSlots + 1);
+        startSlot = Math.max(0, endSlot - defaultSlots + 1);
       }
 
       return { startSlot, endSlot };
     },
-    [defaultSlots, maxSlots, totalSlots],
+    [defaultSlots, totalSlots],
   );
 
   const slotToDate = useCallback((day: Date, slot: number) => {
@@ -232,10 +258,6 @@ export default function LiveStudioCalendar3Day({
 
   function handleMouseDown(dayIndex: number, event: ReactMouseEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
-    if (booking) {
-      onBlockedBooking?.();
-      return;
-    }
     const slot = getSlotFromClientY(event.clientY, dayIndex);
     if (slot === null) return;
     event.preventDefault();
@@ -509,16 +531,26 @@ export default function LiveStudioCalendar3Day({
               onMouseDown={(event) => handleMouseDown(dayIndex, event)}
               className="relative z-10 select-none bg-[var(--studio-card)]"
             >
-              {booking && bookingDayIndex === dayIndex ? (
+              {bookingsByDay[dayIndex]?.map((bookingItem) => (
                 <CalendarBlock
-                  start={booking.start}
-                  end={booking.end}
+                  key={bookingItem.id}
+                  start={bookingItem.start}
+                  end={bookingItem.end}
                   user={user}
-                  task={booking.task}
+                  task={bookingItem.task}
                   slotHeight={SLOT_HEIGHT}
                   totalSlots={totalSlots}
+                  participantCount={bookingItem.participantCount}
+                  maxParticipants={bookingItem.maxParticipants}
+                  isHost={Boolean(
+                    bookingItem.hostId &&
+                      user?.id &&
+                      bookingItem.hostId === user.id,
+                  )}
+                  isSelected={selectedBookingId === bookingItem.id}
+                  onSelect={() => onSelectBooking?.(bookingItem.id)}
                 />
-              ) : null}
+              ))}
 
               {previewRange && previewDayIndex === dayIndex ? (
                 <CalendarBlock
@@ -551,6 +583,7 @@ type CalendarBlockProps = {
   end: Date;
   task: StudioTask;
   user?: {
+    id?: string | null;
     name?: string | null;
     email?: string | null;
     avatarUrl?: string | null;
@@ -558,6 +591,11 @@ type CalendarBlockProps = {
   slotHeight: number;
   totalSlots: number;
   isDraft?: boolean;
+  isHost?: boolean;
+  isSelected?: boolean;
+  participantCount?: number;
+  maxParticipants?: number;
+  onSelect?: () => void;
 };
 
 function CalendarBlock({
@@ -568,6 +606,11 @@ function CalendarBlock({
   slotHeight,
   totalSlots,
   isDraft = false,
+  isHost = false,
+  isSelected = false,
+  participantCount,
+  maxParticipants,
+  onSelect,
 }: CalendarBlockProps) {
   const taskOption = TASK_OPTIONS.find((option) => option.value === task);
   const startMinutes = start.getHours() * 60 + start.getMinutes();
@@ -586,12 +629,31 @@ function CalendarBlock({
 
   return (
     <div
-      className="pointer-events-none absolute left-2 right-2 rounded-2xl border border-[var(--studio-booking-border)] bg-[var(--studio-booking-bg)] px-2 py-2 text-xs text-[var(--studio-booking-text)] shadow-[0_12px_26px_rgba(15,23,42,0.12)]"
+      role={isDraft ? undefined : "button"}
+      tabIndex={isDraft ? undefined : 0}
+      onClick={
+        isDraft
+          ? undefined
+          : (event) => {
+              event.stopPropagation();
+              onSelect?.();
+            }
+      }
+      onMouseDown={
+        isDraft
+          ? undefined
+          : (event) => {
+              event.stopPropagation();
+            }
+      }
+      className={`absolute left-2 right-2 rounded-2xl border border-[var(--studio-booking-border)] bg-[var(--studio-booking-bg)] px-2 py-2 text-xs text-[var(--studio-booking-text)] shadow-[0_12px_26px_rgba(15,23,42,0.12)] ${
+        isDraft ? "pointer-events-none opacity-70" : "cursor-pointer"
+      } ${isSelected ? "ring-2 ring-[var(--studio-accent)]" : ""}`}
       style={{ top, height }}
     >
       <div className="flex items-center gap-2">
         <div className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-[var(--studio-card)] shadow-sm">
-          {user?.avatarUrl ? (
+          {isHost && user?.avatarUrl ? (
             <Image
               src={user.avatarUrl}
               alt="Booked session avatar"
@@ -600,7 +662,9 @@ function CalendarBlock({
               className="h-7 w-7 rounded-full object-cover"
             />
           ) : (
-            <span className="text-[10px] font-semibold">{initials}</span>
+            <span className="text-[10px] font-semibold">
+              {isHost ? initials : "FS"}
+            </span>
           )}
         </div>
         <div className="flex flex-col">
@@ -612,6 +676,12 @@ function CalendarBlock({
           </span>
         </div>
       </div>
+      {typeof participantCount === "number" &&
+      typeof maxParticipants === "number" ? (
+        <div className="mt-1 text-[10px] font-semibold text-[var(--studio-booking-muted)]">
+          {participantCount}/{maxParticipants} participants
+        </div>
+      ) : null}
       {isDraft ? (
         <div className="mt-1 text-[10px] font-semibold text-[var(--studio-accent)]">
           Draft session

@@ -1,12 +1,13 @@
 "use client";
 
 import type { CSSProperties } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import LiveStudioSidebar from "./LiveStudioSidebar";
 import LiveStudioSessionSettings from "./LiveStudioSessionSettings";
 import LiveStudioCalendar3Day, { type StudioBooking } from "./LiveStudioCalendar3Day";
 import LiveStudioRightPanel from "./LiveStudioRightPanel";
 import type { StudioTask } from "./liveStudioOptions";
+import { csrfFetch } from "@/lib/csrf-client";
 
 type LiveStreamStudioShellProps = {
   user?: {
@@ -21,12 +22,73 @@ type LiveStreamStudioShellProps = {
 type ThemeMode = "light" | "dark";
 
 const THEME_STORAGE_KEY = "studymate-live-studio-theme";
+const DEFAULT_TITLE = "Focus Session";
+const ALLOWED_DURATIONS = new Set([30, 60, 120]);
+
+type DateRange = {
+  from: Date;
+  to: Date;
+};
+
+type FocusSessionApi = {
+  id: string;
+  task?: string | null;
+  starts_at: string;
+  ends_at: string;
+  status?: string | null;
+  host_id: string;
+  participant_count?: number | null;
+  max_participants?: number | null;
+};
+
+function startOfDay(date: Date) {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function endOfDay(date: Date) {
+  const next = new Date(date);
+  next.setHours(23, 59, 59, 999);
+  return next;
+}
+
+function isStudioTask(value: unknown): value is StudioTask {
+  return value === "desk" || value === "moving" || value === "anything";
+}
+
+function toStudioBooking(session: FocusSessionApi): StudioBooking | null {
+  const start = new Date(session.starts_at);
+  const end = new Date(session.ends_at);
+  if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) return null;
+  return {
+    id: session.id,
+    task: isStudioTask(session.task) ? session.task : "desk",
+    start,
+    end,
+    hostId: session.host_id,
+    participantCount: session.participant_count ?? 0,
+    maxParticipants: session.max_participants ?? 3,
+    status: session.status ?? "scheduled",
+  };
+}
 
 export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellProps) {
   const [theme, setTheme] = useState<ThemeMode>("light");
   const [durationMinutes, setDurationMinutes] = useState(30);
   const [task, setTask] = useState<StudioTask>("desk");
-  const [booking, setBooking] = useState<StudioBooking | null>(null);
+  const [sessions, setSessions] = useState<StudioBooking[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [visibleRange, setVisibleRange] = useState<DateRange>(() => {
+    const today = startOfDay(new Date());
+    return { from: today, to: endOfDay(addDays(today, 2)) };
+  });
   const [notice, setNotice] = useState<string | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
@@ -43,10 +105,59 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   }, [theme]);
 
   useEffect(() => {
+    fetch("/api/csrf", { cache: "no-store" }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(null), 2400);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  const refreshSessions = useCallback(
+    async (rangeOverride?: DateRange) => {
+      const rangeToUse = rangeOverride ?? visibleRange;
+      if (!rangeToUse?.from || !rangeToUse?.to) return;
+      const params = new URLSearchParams({
+        from: rangeToUse.from.toISOString(),
+        to: rangeToUse.to.toISOString(),
+      });
+      try {
+        const res = await fetch(`/api/focus-sessions?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => null);
+          const message = payload?.error ?? "Failed to load sessions.";
+          setNotice(message);
+          return;
+        }
+        const payload = (await res.json()) as { sessions?: FocusSessionApi[] };
+        const nextSessions =
+          payload?.sessions
+            ?.map(toStudioBooking)
+            .filter((session): session is StudioBooking => Boolean(session)) ??
+          [];
+        setSessions(nextSessions);
+      } catch (err) {
+        console.error(err);
+        setNotice("Failed to load sessions.");
+      }
+    },
+    [visibleRange],
+  );
+
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
+
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    const stillExists = sessions.some((session) => session.id === selectedSessionId);
+    if (!stillExists) {
+      setSelectedSessionId(null);
+    }
+  }, [selectedSessionId, sessions]);
 
   const themeVars = useMemo(
     () =>
@@ -92,24 +203,98 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
     [theme],
   );
 
-  function handleCreateBooking(next: StudioBooking) {
-    if (booking) {
-      setNotice("You already have a session booked.");
-      return false;
-    }
-    setBooking(next);
-    setNotice("Session booked.");
-    return true;
-  }
+  const handleCreateBooking = useCallback(
+    async (next: StudioBooking) => {
+      const rawDuration = Math.round(
+        (next.end.getTime() - next.start.getTime()) / 60000,
+      );
+      const resolvedDuration = ALLOWED_DURATIONS.has(rawDuration)
+        ? rawDuration
+        : durationMinutes;
+      try {
+        const res = await csrfFetch("/api/focus-sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: DEFAULT_TITLE,
+            task: next.task,
+            durationMinutes: resolvedDuration,
+            startsAt: next.start.toISOString(),
+          }),
+        });
+        if (res.status === 409) {
+          setNotice("You already have a session booked.");
+          return;
+        }
+        if (!res.ok) {
+          const payload = await res.json().catch(() => null);
+          const message = payload?.error ?? "Unable to book session.";
+          setNotice(message);
+          return;
+        }
+        const payload = (await res.json()) as { id?: string };
+        if (payload?.id) {
+          setSelectedSessionId(payload.id);
+        }
+        setNotice("Session booked.");
+        await refreshSessions();
+      } catch (err) {
+        console.error(err);
+        setNotice("Unable to book session.");
+      }
+    },
+    [durationMinutes, refreshSessions],
+  );
 
   function handleBookClick() {
-    if (booking) {
-      setNotice("You already have a session booked.");
-      return;
-    }
     setNotice("Drag on the calendar to book your session.");
     setFocusSignal((prev) => prev + 1);
   }
+
+  const selectedSession = useMemo(
+    () => sessions.find((session) => session.id === selectedSessionId) ?? null,
+    [selectedSessionId, sessions],
+  );
+
+  const nextUserSession = useMemo(() => {
+    if (!user?.id) return null;
+    const now = new Date();
+    return (
+      sessions
+        .filter(
+          (session) =>
+            session.hostId === user.id && session.end.getTime() >= now.getTime(),
+        )
+        .sort((a, b) => a.start.getTime() - b.start.getTime())[0] ?? null
+    );
+  }, [sessions, user?.id]);
+
+  const handleCancelSession = useCallback(
+    async (sessionId: string) => {
+      try {
+        const res = await csrfFetch(`/api/focus-sessions/${sessionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "cancelled" }),
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => null);
+          const message = payload?.error ?? "Unable to cancel session.";
+          setNotice(message);
+          return;
+        }
+        setNotice("Session cancelled.");
+        if (selectedSessionId === sessionId) {
+          setSelectedSessionId(null);
+        }
+        await refreshSessions();
+      } catch (err) {
+        console.error(err);
+        setNotice("Unable to cancel session.");
+      }
+    },
+    [refreshSessions, selectedSessionId],
+  );
 
   return (
     <div
@@ -144,13 +329,14 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
             />
 
             <LiveStudioCalendar3Day
-              booking={booking}
+              bookings={sessions}
+              selectedBookingId={selectedSessionId}
+              onSelectBooking={setSelectedSessionId}
               onCreateBooking={handleCreateBooking}
-              onBlockedBooking={() =>
-                setNotice("You already have a session booked.")
-              }
+              onRangeChange={(range) => setVisibleRange(range)}
               notice={notice}
               user={{
+                id: user?.id ?? null,
                 name: user?.displayName ?? user?.name ?? null,
                 email: user?.email ?? null,
                 avatarUrl: user?.avatarUrl ?? null,
@@ -170,7 +356,10 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
               onToggleTheme={() =>
                 setTheme((prev) => (prev === "light" ? "dark" : "light"))
               }
-              booking={booking}
+              selectedSession={selectedSession}
+              upcomingSession={nextUserSession}
+              onCancelSession={handleCancelSession}
+              userId={user?.id ?? null}
               collapsed={isRightPanelCollapsed}
               onCollapseChange={setIsRightPanelCollapsed}
             />

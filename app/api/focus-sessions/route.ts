@@ -11,7 +11,14 @@ type CreateFocusSessionPayload = {
   startsAt?: string;
   duration_minutes?: number;
   durationMinutes?: number;
+  task?: string;
+  title?: string;
 };
+
+const ALLOWED_DURATIONS = new Set([30, 60, 120]);
+const ALLOWED_TASKS = new Set(["desk", "moving", "anything"]);
+const MAX_PARTICIPANTS = 3;
+const DEFAULT_TITLE = "Focus Session";
 
 function parseStartsAt(value: unknown) {
   if (typeof value !== "string") return null;
@@ -32,6 +39,142 @@ function parseDurationMinutes(value: unknown) {
     return duration > 0 ? duration : null;
   }
   return null;
+}
+
+function parseTask(value: unknown) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (!ALLOWED_TASKS.has(normalized)) return null;
+  return normalized;
+}
+
+function parseTitle(value: unknown) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, 140) : null;
+}
+
+function isStartAtLeastOneMinuteFromNow(startsAt: Date) {
+  return startsAt.getTime() >= Date.now() + 60_000;
+}
+
+function computeEndsAt(startsAt: Date, durationMinutes: number) {
+  return new Date(startsAt.getTime() + durationMinutes * 60_000);
+}
+
+export async function GET(req: NextRequest) {
+  const session = await auth();
+  const user = session?.user as { id?: string } | undefined;
+  if (!user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const fromRaw = searchParams.get("from");
+  const toRaw = searchParams.get("to");
+  const from = parseStartsAt(fromRaw);
+  const to = parseStartsAt(toRaw);
+  if (!from || !to) {
+    return NextResponse.json(
+      { error: "from and to are required" },
+      { status: 400 },
+    );
+  }
+  if (from.getTime() > to.getTime()) {
+    return NextResponse.json(
+      { error: "from must be before to" },
+      { status: 400 },
+    );
+  }
+
+  const sb = supabaseAdmin();
+  const { data, error } = await sb
+    .from("focus_sessions")
+    .select(
+      "id, creator_user_id, starts_at, ends_at, duration_minutes, task, status, max_participants",
+    )
+    .gte("starts_at", from.toISOString())
+    .lte("starts_at", to.toISOString())
+    .in("status", ["scheduled", "active"])
+    .order("starts_at", { ascending: true });
+
+  if (error) {
+    console.error("[focus sessions] list failed", error);
+    return NextResponse.json(
+      { error: "Failed to load sessions" },
+      { status: 500 },
+    );
+  }
+
+  const sessions = data ?? [];
+  const sessionIds = sessions.map((row) => row.id);
+  const participantCounts = new Map<string, number>();
+
+  if (sessionIds.length > 0) {
+    const { data: participants, error: participantError } = await sb
+      .from("focus_session_participants")
+      .select("session_id")
+      .in("session_id", sessionIds);
+
+    if (participantError) {
+      console.error("[focus sessions] participant list failed", participantError);
+      return NextResponse.json(
+        { error: "Failed to load sessions" },
+        { status: 500 },
+      );
+    }
+
+    participants?.forEach((row) => {
+      const current = participantCounts.get(row.session_id) ?? 0;
+      participantCounts.set(row.session_id, current + 1);
+    });
+  }
+
+  const now = new Date();
+  const payload = sessions
+    .map((row) => {
+      const startsAt = new Date(row.starts_at);
+      const endsAt = row.ends_at
+        ? new Date(row.ends_at)
+        : computeEndsAt(
+            startsAt,
+            Number.isFinite(row.duration_minutes)
+              ? Number(row.duration_minutes)
+              : 0,
+          );
+      if (Number.isNaN(startsAt.valueOf()) || Number.isNaN(endsAt.valueOf())) {
+        return null;
+      }
+      if (endsAt.getTime() < now.getTime()) {
+        return null;
+      }
+      return {
+        id: row.id,
+        task: row.task ?? "desk",
+        starts_at: startsAt.toISOString(),
+        ends_at: endsAt.toISOString(),
+        status: row.status ?? "scheduled",
+        host_id: row.creator_user_id,
+        participant_count: participantCounts.get(row.id) ?? 0,
+        max_participants: row.max_participants ?? MAX_PARTICIPANTS,
+      };
+    })
+    .filter(
+      (row): row is {
+        id: string;
+        task: string;
+        starts_at: string;
+        ends_at: string;
+        status: string;
+        host_id: string;
+        participant_count: number;
+        max_participants: number;
+      } => Boolean(row),
+    );
+
+  const response = NextResponse.json({ sessions: payload });
+  response.headers.set("Cache-Control", "no-store");
+  return response;
 }
 
 export async function POST(req: NextRequest) {
@@ -56,14 +199,104 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (!isStartAtLeastOneMinuteFromNow(startsAt)) {
+    return NextResponse.json(
+      { error: "starts_at must be at least 1 minute in the future" },
+      { status: 400 },
+    );
+  }
+
   const durationMinutes = parseDurationMinutes(
     payload.duration_minutes ?? payload.durationMinutes,
   );
-  if (!durationMinutes) {
+  if (!durationMinutes || !ALLOWED_DURATIONS.has(durationMinutes)) {
     return NextResponse.json(
-      { error: "duration_minutes is required" },
+      { error: "duration_minutes must be 30, 60, or 120" },
       { status: 400 },
     );
+  }
+
+  const endsAt = computeEndsAt(startsAt, durationMinutes);
+  const task = parseTask(payload.task) ?? "desk";
+  const title = parseTitle(payload.title) ?? DEFAULT_TITLE;
+
+  const sb = supabaseAdmin();
+
+  const overlapFilter = {
+    start: startsAt.toISOString(),
+    end: endsAt.toISOString(),
+  };
+
+  const { data: hostOverlap, error: hostOverlapError } = await sb
+    .from("focus_sessions")
+    .select("id")
+    .eq("creator_user_id", user.id)
+    .lt("starts_at", overlapFilter.end)
+    .gt("ends_at", overlapFilter.start)
+    .in("status", ["scheduled", "active"])
+    .limit(1);
+
+  if (hostOverlapError) {
+    console.error("[focus sessions] overlap check failed", hostOverlapError);
+    return NextResponse.json(
+      { error: "Failed to validate session" },
+      { status: 500 },
+    );
+  }
+
+  if ((hostOverlap ?? []).length > 0) {
+    return NextResponse.json(
+      { error: "You already have a session booked." },
+      { status: 409 },
+    );
+  }
+
+  const { data: participantRows, error: participantLookupError } = await sb
+    .from("focus_session_participants")
+    .select("session_id")
+    .eq("user_id", user.id);
+
+  if (participantLookupError) {
+    console.error(
+      "[focus sessions] participant lookup failed",
+      participantLookupError,
+    );
+    return NextResponse.json(
+      { error: "Failed to validate session" },
+      { status: 500 },
+    );
+  }
+
+  const participantSessionIds =
+    participantRows?.map((row) => row.session_id) ?? [];
+
+  if (participantSessionIds.length > 0) {
+    const { data: participantOverlap, error: participantOverlapError } = await sb
+      .from("focus_sessions")
+      .select("id")
+      .in("id", participantSessionIds)
+      .lt("starts_at", overlapFilter.end)
+      .gt("ends_at", overlapFilter.start)
+      .in("status", ["scheduled", "active"])
+      .limit(1);
+
+    if (participantOverlapError) {
+      console.error(
+        "[focus sessions] participant overlap failed",
+        participantOverlapError,
+      );
+      return NextResponse.json(
+        { error: "Failed to validate session" },
+        { status: 500 },
+      );
+    }
+
+    if ((participantOverlap ?? []).length > 0) {
+      return NextResponse.json(
+        { error: "You already have a session booked." },
+        { status: 409 },
+      );
+    }
   }
 
   const accessKey = process.env.HMS_APP_ACCESS_KEY;
@@ -113,20 +346,40 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const sb = supabaseAdmin();
   const { data: inserted, error } = await sb
     .from("focus_sessions")
     .insert({
       creator_user_id: user.id,
       starts_at: startsAt.toISOString(),
+      ends_at: endsAt.toISOString(),
       duration_minutes: durationMinutes,
       hms_room_id: created.id,
+      task,
+      title,
+      status: "scheduled",
+      max_participants: MAX_PARTICIPANTS,
     })
     .select("id")
     .single();
 
   if (error || !inserted?.id) {
     console.error("[focus sessions] insert failed", error);
+    return NextResponse.json(
+      { error: "Failed to store session" },
+      { status: 500 },
+    );
+  }
+
+  const { error: participantError } = await sb
+    .from("focus_session_participants")
+    .upsert(
+      { session_id: inserted.id, user_id: user.id },
+      { onConflict: "session_id,user_id" },
+    );
+
+  if (participantError) {
+    console.error("[focus sessions] host insert failed", participantError);
+    await sb.from("focus_sessions").delete().eq("id", inserted.id);
     return NextResponse.json(
       { error: "Failed to store session" },
       { status: 500 },
