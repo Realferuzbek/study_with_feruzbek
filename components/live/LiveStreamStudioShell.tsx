@@ -25,6 +25,7 @@ type ThemeMode = "light" | "dark";
 const THEME_STORAGE_KEY = "studymate-live-studio-theme";
 const DEFAULT_TITLE = "Focus Session";
 const ALLOWED_DURATIONS = new Set([30, 60, 120]);
+const EMPTY_SESSIONS: StudioBooking[] = [];
 
 type DateRange = {
   from: Date;
@@ -153,17 +154,20 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   const publicCtaLabel = "Continue";
   const publicHelperText = "You're one click away from joining.";
 
-  const visibleRangeKey = useMemo(
-    () => buildRangeKey(visibleRange),
-    [sessionsEndpoint, visibleRange],
-  );
-
-  const sessionsEntry = sessionsCache[visibleRangeKey];
-  const sessions = sessionsEntry?.sessions ?? [];
-  const isRangeLoading = sessionsEntry?.isLoading ?? false;
   const sessionsEndpoint = isPublic
     ? "/api/public/sessions"
     : "/api/focus-sessions";
+  const visibleRangeKey = useMemo(
+    () => buildRangeKey(visibleRange),
+    [visibleRange],
+  );
+
+  const sessionsEntry = sessionsCache[visibleRangeKey];
+  const sessions = useMemo(
+    () => sessionsEntry?.sessions ?? EMPTY_SESSIONS,
+    [sessionsEntry?.sessions],
+  );
+  const isRangeLoading = sessionsEntry?.isLoading ?? false;
 
   useEffect(() => {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -325,7 +329,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         });
       }
     },
-    [visibleRange],
+    [sessionsEndpoint, visibleRange],
   );
 
   useEffect(() => {
@@ -553,14 +557,14 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
     ],
   );
 
-  function handleBookClick() {
+  const handleBookClick = useCallback(() => {
     if (!user?.id) {
       redirectToSignin("book");
       return;
     }
     setNotice("Drag on the calendar to book your session.");
     setFocusSignal((prev) => prev + 1);
-  }
+  }, [redirectToSignin, user?.id]);
 
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) ?? null,
