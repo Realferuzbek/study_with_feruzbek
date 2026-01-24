@@ -8,6 +8,8 @@ type LiveStudioSessionSettingsProps = {
   task: StudioTask;
   onTaskChange: (value: StudioTask) => void;
   onBookSession?: () => void;
+  primaryLabel?: string;
+  helperText?: string | null;
 };
 
 function cx(...classes: Array<string | false | undefined>) {
@@ -20,6 +22,8 @@ export default function LiveStudioSessionSettings({
   task,
   onTaskChange,
   onBookSession,
+  primaryLabel,
+  helperText,
 }: LiveStudioSessionSettingsProps) {
   return (
     <section className="flex flex-col gap-3">
@@ -28,8 +32,13 @@ export default function LiveStudioSessionSettings({
         onClick={onBookSession}
         className="h-11 w-full rounded-[20px] bg-[var(--studio-accent)] text-sm font-semibold text-white shadow-[0_12px_26px_rgba(91,92,226,0.32)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_30px_rgba(91,92,226,0.38)]"
       >
-        Book session
+        {primaryLabel ?? "Book session"}
       </button>
+      {helperText ? (
+        <p className="text-xs font-medium text-[var(--studio-muted)]">
+          {helperText}
+        </p>
+      ) : null}
 
       <div className="rounded-[24px] border border-[var(--studio-border)] bg-[var(--studio-card)] p-4 shadow-[0_18px_45px_rgba(15,23,42,0.08)]">
         <div className="flex items-center justify-between">

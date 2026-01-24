@@ -1,8 +1,8 @@
 "use client";
 
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import LiveStudioSidebar from "./LiveStudioSidebar";
 import LiveStudioSessionSettings from "./LiveStudioSessionSettings";
 import LiveStudioCalendar3Day, { type StudioBooking } from "./LiveStudioCalendar3Day";
@@ -38,14 +38,20 @@ type SessionCacheEntry = {
 };
 
 type FocusSessionApi = {
-  id: string;
+  id?: string;
+  session_id?: string;
   task?: string | null;
-  starts_at: string;
-  ends_at: string;
+  type?: string | null;
+  starts_at?: string;
+  start_at?: string;
+  ends_at?: string;
+  end_at?: string;
   status?: string | null;
-  host_id: string;
+  host_id?: string | null;
+  host_display_name?: string | null;
   participant_count?: number | null;
   max_participants?: number | null;
+  room_id?: string | null;
 };
 
 function startOfDay(date: Date) {
@@ -79,19 +85,42 @@ function isStudioTask(value: unknown): value is StudioTask {
 }
 
 function toStudioBooking(session: FocusSessionApi): StudioBooking | null {
-  const start = new Date(session.starts_at);
-  const end = new Date(session.ends_at);
+  const id = session.id ?? session.session_id;
+  if (!id) return null;
+  const startRaw = session.starts_at ?? session.start_at;
+  const endRaw = session.ends_at ?? session.end_at;
+  if (!startRaw || !endRaw) return null;
+  const start = new Date(startRaw);
+  const end = new Date(endRaw);
   if (Number.isNaN(start.valueOf()) || Number.isNaN(end.valueOf())) return null;
+  const taskValue = session.task ?? session.type ?? "desk";
   return {
-    id: session.id,
-    task: isStudioTask(session.task) ? session.task : "desk",
+    id,
+    task: isStudioTask(taskValue) ? taskValue : "desk",
     start,
     end,
-    hostId: session.host_id,
+    hostId: session.host_id ?? null,
+    hostDisplayName: session.host_display_name ?? null,
     participantCount: session.participant_count ?? 0,
     maxParticipants: session.max_participants ?? 3,
     status: session.status ?? "scheduled",
+    roomId: session.room_id ?? null,
   };
+}
+
+function canAutoJoin(session: StudioBooking) {
+  if (session.status === "cancelled" || session.status === "completed") {
+    return false;
+  }
+  const maxParticipants = session.maxParticipants ?? 3;
+  const participantCount = session.participantCount ?? 0;
+  if (participantCount >= maxParticipants) {
+    return false;
+  }
+  const now = Date.now();
+  const joinOpenAt = session.start.getTime() - 10 * 60 * 1000;
+  const joinCloseAt = session.end.getTime() + 5 * 60 * 1000;
+  return now >= joinOpenAt && now <= joinCloseAt;
 }
 
 export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellProps) {
@@ -110,16 +139,31 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   const [focusSignal, setFocusSignal] = useState(0);
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
   const [joiningSessionId, setJoiningSessionId] = useState<string | null>(null);
+  const [pendingCancelSessionId, setPendingCancelSessionId] = useState<string | null>(
+    null,
+  );
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const isPublic = !user?.id;
+  const intent = searchParams.get("intent");
+  const intentSessionId = searchParams.get("sessionId");
+  const handledIntentRef = useRef<string | null>(null);
+
+  const publicCtaLabel = "Continue";
+  const publicHelperText = "You're one click away from joining.";
 
   const visibleRangeKey = useMemo(
     () => buildRangeKey(visibleRange),
-    [visibleRange],
+    [sessionsEndpoint, visibleRange],
   );
 
   const sessionsEntry = sessionsCache[visibleRangeKey];
   const sessions = sessionsEntry?.sessions ?? [];
   const isRangeLoading = sessionsEntry?.isLoading ?? false;
+  const sessionsEndpoint = isPublic
+    ? "/api/public/sessions"
+    : "/api/focus-sessions";
 
   useEffect(() => {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -133,14 +177,27 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   }, [theme]);
 
   useEffect(() => {
+    if (isPublic) return;
     fetch("/api/csrf", { cache: "no-store" }).catch(() => {});
-  }, []);
+  }, [isPublic]);
 
   useEffect(() => {
     if (!notice) return;
     const timer = window.setTimeout(() => setNotice(null), 2400);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  const redirectToSignin = useCallback(
+    (nextIntent: "book" | "join" | "cancel", sessionId?: string | null) => {
+      const params = new URLSearchParams({ intent: nextIntent });
+      if (sessionId) {
+        params.set("sessionId", sessionId);
+      }
+      const callbackUrl = `/feature/live?${params.toString()}`;
+      router.push(`/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
+    },
+    [router],
+  );
 
   const updateRangeSessions = useCallback(
     (rangeKey: string, updater: (sessions: StudioBooking[]) => StudioBooking[]) => {
@@ -207,7 +264,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         to: rangeToUse.to.toISOString(),
       });
       try {
-        const res = await fetch(`/api/focus-sessions?${params.toString()}`, {
+        const res = await fetch(`${sessionsEndpoint}?${params.toString()}`, {
           cache: "no-store",
         });
         if (!res.ok) {
@@ -283,6 +340,57 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
     }
   }, [selectedSessionId, sessions]);
 
+  useEffect(() => {
+    if (!pendingCancelSessionId) return;
+    const stillExists = sessions.some(
+      (session) => session.id === pendingCancelSessionId,
+    );
+    if (!stillExists) {
+      setPendingCancelSessionId(null);
+    }
+  }, [pendingCancelSessionId, sessions]);
+
+  useEffect(() => {
+    if (!intent || !user?.id) return;
+    const key = `${intent}:${intentSessionId ?? ""}`;
+    if (handledIntentRef.current === key) return;
+
+    if (intent === "book") {
+      handleBookClick();
+      handledIntentRef.current = key;
+      return;
+    }
+
+    if ((intent === "join" || intent === "cancel") && !intentSessionId) {
+      handledIntentRef.current = key;
+      return;
+    }
+
+    const targetSession = sessions.find(
+      (session) => session.id === intentSessionId,
+    );
+    if (!targetSession) return;
+
+    setSelectedSessionId(targetSession.id);
+
+    if (intent === "join") {
+      if (canAutoJoin(targetSession)) {
+        handleJoinSession(targetSession);
+      }
+    } else if (intent === "cancel") {
+      setPendingCancelSessionId(targetSession.id);
+    }
+
+    handledIntentRef.current = key;
+  }, [
+    handleBookClick,
+    handleJoinSession,
+    intent,
+    intentSessionId,
+    sessions,
+    user?.id,
+  ]);
+
   const themeVars = useMemo(
     () =>
       theme === "dark"
@@ -329,6 +437,10 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
 
   const handleCreateBooking = useCallback(
     async (next: StudioBooking) => {
+      if (!user?.id) {
+        redirectToSignin("book");
+        return;
+      }
       const rawDuration = Math.round(
         (next.end.getTime() - next.start.getTime()) / 60000,
       );
@@ -431,6 +543,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
     },
     [
       durationMinutes,
+      redirectToSignin,
       refreshSessions,
       selectedSessionId,
       updateRangeSessions,
@@ -441,6 +554,10 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   );
 
   function handleBookClick() {
+    if (!user?.id) {
+      redirectToSignin("book");
+      return;
+    }
     setNotice("Drag on the calendar to book your session.");
     setFocusSignal((prev) => prev + 1);
   }
@@ -466,8 +583,28 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
     );
   }, [sessions, user?.id]);
 
+  const publicUpcomingSessions = useMemo(() => {
+    if (!isPublic) return [];
+    const now = new Date();
+    return sessions
+      .filter(
+        (session) =>
+          session.end.getTime() >= now.getTime() &&
+          session.status !== "cancelled" &&
+          session.status !== "completed",
+      )
+      .sort((a, b) => a.start.getTime() - b.start.getTime());
+  }, [isPublic, sessions]);
+
+  const publicFeaturedSession = publicUpcomingSessions[0] ?? null;
+  const upcomingSessionForPanel = isPublic ? publicFeaturedSession : nextUserSession;
+
   const handleCancelSession = useCallback(
     async (sessionId: string) => {
+      if (!user?.id) {
+        redirectToSignin("cancel", sessionId);
+        return;
+      }
       const previousByKey: Record<string, StudioBooking | null> = {};
       for (const [key, entry] of Object.entries(sessionsCache)) {
         previousByKey[key] =
@@ -540,13 +677,19 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
           return next;
         });
         setNotice("Unable to cancel session.");
+      } finally {
+        setPendingCancelSessionId((prev) =>
+          prev === sessionId ? null : prev,
+        );
       }
     },
     [
+      redirectToSignin,
       refreshSessions,
       selectedSessionId,
       sessionsCache,
       updateAllCachedSessions,
+      user?.id,
       visibleRange,
     ],
   );
@@ -554,6 +697,10 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   const handleJoinSession = useCallback(
     async (session: StudioBooking) => {
       if (!session?.id) return;
+      if (!user?.id) {
+        redirectToSignin("join", session.id);
+        return;
+      }
       if (joiningSessionId && joiningSessionId !== session.id) return;
       setJoiningSessionId(session.id);
       try {
@@ -610,7 +757,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         setJoiningSessionId(null);
       }
     },
-    [joiningSessionId, router],
+    [joiningSessionId, redirectToSignin, router, user?.id],
   );
 
   return (
@@ -643,6 +790,8 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
               task={task}
               onTaskChange={setTask}
               onBookSession={handleBookClick}
+              primaryLabel={isPublic ? publicCtaLabel : undefined}
+              helperText={isPublic ? publicHelperText : null}
             />
 
             <LiveStudioCalendar3Day
@@ -653,6 +802,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
               onRangeChange={(range) => setVisibleRange(range)}
               notice={notice}
               isLoading={isRangeLoading}
+              isReadOnly={isPublic}
               user={{
                 id: user?.id ?? null,
                 name: user?.displayName ?? user?.name ?? null,
@@ -675,7 +825,17 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
                 setTheme((prev) => (prev === "light" ? "dark" : "light"))
               }
               selectedSession={selectedSession}
-              upcomingSession={nextUserSession}
+              upcomingSession={upcomingSessionForPanel}
+              upcomingSessions={isPublic ? publicUpcomingSessions : []}
+              isPublic={isPublic}
+              publicCtaLabel={publicCtaLabel}
+              publicHelperText={publicHelperText}
+              onPublicAction={(nextIntent, sessionId) =>
+                redirectToSignin(nextIntent, sessionId)
+              }
+              pendingCancelSessionId={pendingCancelSessionId}
+              onConfirmCancel={(sessionId) => handleCancelSession(sessionId)}
+              onDismissCancel={() => setPendingCancelSessionId(null)}
               onCancelSession={handleCancelSession}
               onJoinSession={handleJoinSession}
               joiningSessionId={joiningSessionId}

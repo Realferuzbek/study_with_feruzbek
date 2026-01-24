@@ -18,6 +18,14 @@ type LiveStudioRightPanelProps = {
   onToggleTheme: () => void;
   selectedSession: StudioBooking | null;
   upcomingSession: StudioBooking | null;
+  upcomingSessions?: StudioBooking[];
+  isPublic?: boolean;
+  publicCtaLabel?: string;
+  publicHelperText?: string | null;
+  onPublicAction?: (intent: "join" | "cancel", sessionId: string) => void;
+  pendingCancelSessionId?: string | null;
+  onConfirmCancel?: (sessionId: string) => void;
+  onDismissCancel?: () => void;
   onCancelSession: (sessionId: string) => void;
   onJoinSession: (session: StudioBooking) => void;
   joiningSessionId?: string | null;
@@ -33,6 +41,14 @@ function formatTimeCompact(date: Date) {
   return `${hour12}:${minutes}${suffix}`;
 }
 
+function formatDateLabel(date: Date) {
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(date);
+}
+
 export default function LiveStudioRightPanel({
   user,
   userId,
@@ -40,6 +56,14 @@ export default function LiveStudioRightPanel({
   onToggleTheme,
   selectedSession,
   upcomingSession,
+  upcomingSessions = [],
+  isPublic = false,
+  publicCtaLabel = "Continue",
+  publicHelperText = null,
+  onPublicAction,
+  pendingCancelSessionId = null,
+  onConfirmCancel,
+  onDismissCancel,
   onCancelSession,
   onJoinSession,
   joiningSessionId,
@@ -63,11 +87,7 @@ export default function LiveStudioRightPanel({
 
   const scheduleLabel = useMemo(() => {
     if (!focusedSession) return null;
-    const dateLabel = new Intl.DateTimeFormat("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-    }).format(focusedSession.start);
+    const dateLabel = formatDateLabel(focusedSession.start);
     const timeLabel = `${formatTimeCompact(
       focusedSession.start,
     )} - ${formatTimeCompact(
@@ -83,6 +103,15 @@ export default function LiveStudioRightPanel({
         ?.label ?? "Session"
     );
   }, [focusedSession]);
+
+  const hostLabel = useMemo(() => {
+    if (!focusedSession) return null;
+    if (focusedSession.hostDisplayName) return focusedSession.hostDisplayName;
+    if (focusedSession.hostId && userId && focusedSession.hostId === userId) {
+      return user?.displayName ?? user?.name ?? null;
+    }
+    return null;
+  }, [focusedSession, user?.displayName, user?.name, userId]);
 
   const joinWindow = useMemo(() => {
     if (!focusedSession) return null;
@@ -130,6 +159,10 @@ export default function LiveStudioRightPanel({
 
   const isJoining = Boolean(
     focusedSession?.id && joiningSessionId === focusedSession.id,
+  );
+
+  const isConfirmingCancel = Boolean(
+    focusedSession?.id && pendingCancelSessionId === focusedSession.id,
   );
 
   if (collapsed) {
@@ -222,14 +255,50 @@ export default function LiveStudioRightPanel({
         >
           <span className="flex items-center gap-2">
             <CalendarDays className="h-4 w-4 text-[var(--studio-muted)]" />
-            My Schedule
+            {isPublic ? "Upcoming Sessions" : "My Schedule"}
           </span>
           <ChevronRight className="h-4 w-4 text-[var(--studio-muted)]" />
         </button>
 
         {showSchedule ? (
           <div className="mt-3 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 py-3 text-sm text-[var(--studio-text)]">
-            {focusedSession && scheduleLabel ? (
+            {isPublic ? (
+              upcomingSessions.length > 0 ? (
+                <div className="flex flex-col gap-3">
+                  {upcomingSessions.map((session) => {
+                    const listTaskLabel =
+                      TASK_OPTIONS.find((option) => option.value === session.task)
+                        ?.label ?? "Session";
+                    const listHostLabel =
+                      session.hostDisplayName ?? "Focus Host";
+                    return (
+                      <div
+                        key={session.id}
+                        className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-card)] px-3 py-2"
+                      >
+                        <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--studio-subtle)]">
+                          {formatDateLabel(session.start)}
+                        </span>
+                        <div className="mt-1 font-semibold">
+                          {formatTimeCompact(session.start)} -{" "}
+                          {formatTimeCompact(session.end)}
+                        </div>
+                        <div className="text-xs text-[var(--studio-muted)]">
+                          Task: {listTaskLabel}
+                        </div>
+                        <div className="text-xs text-[var(--studio-muted)]">
+                          Host: {listHostLabel}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-sm text-[var(--studio-muted)]">
+                  No upcoming sessions yet.
+                </p>
+              )
+            ) : focusedSession && scheduleLabel ? (
               <div className="flex flex-col gap-1">
                 <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--studio-subtle)]">
                   {scheduleLabel.dateLabel}
@@ -269,6 +338,11 @@ export default function LiveStudioRightPanel({
                 <span className="text-xs text-[var(--studio-muted)]">
                   Task: {taskLabel}
                 </span>
+                {hostLabel ? (
+                  <span className="text-xs text-[var(--studio-muted)]">
+                    Host: {hostLabel}
+                  </span>
+                ) : null}
                 <span className="text-xs text-[var(--studio-muted)]">
                   {focusedSession.participantCount ?? 0}/
                   {focusedSession.maxParticipants ?? 3} participants
@@ -279,6 +353,50 @@ export default function LiveStudioRightPanel({
               joinState?.state === "ended" ? (
                 <div className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-card)] px-3 py-2 text-center text-sm font-semibold text-[var(--studio-muted)]">
                   {joinState?.label ?? "Session unavailable"}
+                </div>
+              ) : isPublic ? (
+                joinState?.state === "open" ? (
+                  <div className="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onPublicAction?.("join", focusedSession.id)}
+                      className="h-10 w-full rounded-xl bg-[var(--studio-accent)] text-sm font-semibold text-white shadow-[0_12px_26px_rgba(91,92,226,0.32)] transition hover:-translate-y-0.5"
+                    >
+                      {publicCtaLabel}
+                    </button>
+                    {publicHelperText ? (
+                      <p className="text-xs font-medium text-[var(--studio-muted)]">
+                        {publicHelperText}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-card)] px-3 py-2 text-center text-sm font-semibold text-[var(--studio-muted)]">
+                    {joinState?.label ?? "Session unavailable"}
+                  </div>
+                )
+              ) : isConfirmingCancel ? (
+                <div className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-card)] px-3 py-3 text-sm text-[var(--studio-text)]">
+                  <p className="font-semibold">Cancel this session?</p>
+                  <p className="mt-1 text-xs text-[var(--studio-muted)]">
+                    This frees the slot for others.
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onConfirmCancel?.(focusedSession.id)}
+                      className="h-9 rounded-lg border border-rose-500/40 bg-rose-500/10 text-xs font-semibold text-rose-500 transition hover:-translate-y-0.5"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDismissCancel?.()}
+                      className="h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-panel)] text-xs font-semibold text-[var(--studio-text)] transition hover:-translate-y-0.5"
+                    >
+                      Keep
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <button
@@ -298,7 +416,7 @@ export default function LiveStudioRightPanel({
                 </button>
               )}
 
-              {canCancel ? (
+              {!isPublic && canCancel && !isConfirmingCancel ? (
                 <button
                   type="button"
                   onClick={() => onCancelSession(focusedSession.id)}
@@ -310,7 +428,9 @@ export default function LiveStudioRightPanel({
             </div>
           ) : (
             <p className="text-sm text-[var(--studio-muted)]">
-              Select a session to join.
+              {isPublic
+                ? "Select a session to see details."
+                : "Select a session to join."}
             </p>
           )}
         </div>

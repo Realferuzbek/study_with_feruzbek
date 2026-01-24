@@ -79,6 +79,7 @@ const PUBLIC_PATHS = new Set<string>([
   "/signin",
   "/api/auth",
   "/api/live",
+  "/api/public",
   "/api/reindex",
   "/api/leaderboard/health",
   "/api/leaderboard/latest",
@@ -114,6 +115,7 @@ function isPublic(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (isAdminPath(pathname)) return false;
   if (pathname === "/") return true;
+  if (pathname === "/feature/live" || pathname === "/feature/live/") return true;
   if (pathname === "/api/chat") return true;
   if (pathname === "/api/chat/status") return true;
   if (pathname === "/api/chat/rating") return true;

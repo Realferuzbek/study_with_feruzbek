@@ -18,6 +18,8 @@ export type StudioBooking = {
   end: Date;
   task: StudioTask;
   hostId?: string | null;
+  hostDisplayName?: string | null;
+  roomId?: string | null;
   participantCount?: number;
   maxParticipants?: number;
   status?: StudioBookingStatus | string;
@@ -26,12 +28,13 @@ export type StudioBooking = {
 
 type LiveStudioCalendar3DayProps = {
   bookings: StudioBooking[];
-  onCreateBooking: (booking: StudioBooking) => void;
+  onCreateBooking?: (booking: StudioBooking) => void;
   onSelectBooking?: (bookingId: string) => void;
   selectedBookingId?: string | null;
   onRangeChange?: (range: { from: Date; to: Date }) => void;
   notice?: string | null;
   isLoading?: boolean;
+  isReadOnly?: boolean;
   user?: {
     id?: string | null;
     name?: string | null;
@@ -120,16 +123,14 @@ function getTimezoneLabel() {
   )}`;
 }
 
-function initialsFromUser(name?: string | null, email?: string | null) {
-  if (name) {
-    const parts = name.trim().split(/\s+/);
+function initialsFromLabel(label?: string | null, fallback = "U") {
+  if (label) {
+    const parts = label.trim().split(/\s+/);
     const letters = parts.slice(0, 2).map((part) => part[0]?.toUpperCase());
-    return letters.join("") || "U";
+    const resolved = letters.join("");
+    if (resolved) return resolved;
   }
-  if (email) {
-    return email.trim().slice(0, 1).toUpperCase() || "U";
-  }
-  return "U";
+  return fallback;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -144,6 +145,7 @@ export default function LiveStudioCalendar3Day({
   onRangeChange,
   notice,
   isLoading = false,
+  isReadOnly = false,
   user,
   settings,
   focusSignal,
@@ -260,6 +262,7 @@ export default function LiveStudioCalendar3Day({
   );
 
   function handleMouseDown(dayIndex: number, event: ReactMouseEvent<HTMLDivElement>) {
+    if (isReadOnly) return;
     if (event.button !== 0) return;
     const slot = getSlotFromClientY(event.clientY, dayIndex);
     if (slot === null) return;
@@ -294,7 +297,7 @@ export default function LiveStudioCalendar3Day({
       const day = days[dragSnapshot.dayIndex];
       const start = slotToDate(day, range.startSlot);
       const end = slotToDate(day, range.endSlot + 1);
-      onCreateBooking({
+      onCreateBooking?.({
         id: `booking-${start.getTime()}`,
         start,
         end,
@@ -532,7 +535,7 @@ export default function LiveStudioCalendar3Day({
             </div>
           </div>
 
-          {days.map((day, dayIndex) => (
+      {days.map((day, dayIndex) => (
             <div
               key={day.toISOString()}
               ref={(node) => {
@@ -559,6 +562,7 @@ export default function LiveStudioCalendar3Day({
                       user?.id &&
                       bookingItem.hostId === user.id,
                   )}
+                  hostDisplayName={bookingItem.hostDisplayName ?? null}
                   isSelected={selectedBookingId === bookingItem.id}
                   onSelect={() => onSelectBooking?.(bookingItem.id)}
                 />
@@ -596,6 +600,7 @@ type CalendarBlockProps = {
   task: StudioTask;
   status?: StudioBookingStatus | string;
   isOptimistic?: boolean;
+  hostDisplayName?: string | null;
   user?: {
     id?: string | null;
     name?: string | null;
@@ -619,6 +624,7 @@ function CalendarBlock({
   status,
   isOptimistic = false,
   user,
+  hostDisplayName,
   slotHeight,
   totalSlots,
   isDraft = false,
@@ -641,7 +647,10 @@ function CalendarBlock({
   );
   const height = Math.max(slotHeight, durationSlots * slotHeight);
   const top = startSlot * slotHeight;
-  const initials = initialsFromUser(user?.name, user?.email);
+  const hostLabel = isHost
+    ? user?.name ?? hostDisplayName ?? null
+    : hostDisplayName ?? null;
+  const initials = initialsFromLabel(hostLabel, "FS");
 
   const isCancelled = status === "cancelled";
   const isCompleted = status === "completed";
@@ -689,7 +698,7 @@ function CalendarBlock({
             />
           ) : (
             <span className="text-[10px] font-semibold">
-              {isHost ? initials : "FS"}
+              {initials}
             </span>
           )}
         </div>
@@ -700,6 +709,11 @@ function CalendarBlock({
           <span className="text-[10px] text-[var(--studio-booking-muted)]">
             {formatTimeCompact(start)} - {formatTimeCompact(end)}
           </span>
+          {hostLabel ? (
+            <span className="text-[10px] text-[var(--studio-booking-muted)]">
+              Host: {hostLabel}
+            </span>
+          ) : null}
         </div>
       </div>
       {typeof participantCount === "number" &&

@@ -130,6 +130,36 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  const hostIds = Array.from(
+    new Set(
+      sessions
+        .map((row) => row.creator_user_id)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+  const hostMap = new Map<string, { id: string; display_name?: string | null; name?: string | null }>();
+
+  if (hostIds.length > 0) {
+    const { data: hosts, error: hostError } = await sb
+      .from("users")
+      .select("id, display_name, name")
+      .in("id", hostIds);
+
+    if (hostError) {
+      console.error("[focus sessions] host lookup failed", hostError);
+      return NextResponse.json(
+        { error: "Failed to load sessions" },
+        { status: 500 },
+      );
+    }
+
+    (hosts ?? []).forEach((row) => {
+      if (row?.id) {
+        hostMap.set(row.id, row);
+      }
+    });
+  }
+
   const now = new Date();
   const payload = sessions
     .map((row) => {
@@ -148,6 +178,9 @@ export async function GET(req: NextRequest) {
       if (endsAt.getTime() < now.getTime()) {
         return null;
       }
+      const hostProfile = hostMap.get(row.creator_user_id ?? "") ?? null;
+      const hostDisplayName =
+        hostProfile?.display_name ?? hostProfile?.name ?? "Focus Host";
       return {
         id: row.id,
         task: row.task ?? "desk",
@@ -155,8 +188,10 @@ export async function GET(req: NextRequest) {
         ends_at: endsAt.toISOString(),
         status: row.status ?? "scheduled",
         host_id: row.creator_user_id,
+        host_display_name: hostDisplayName,
         participant_count: participantCounts.get(row.id) ?? 0,
         max_participants: row.max_participants ?? MAX_PARTICIPANTS,
+        room_id: row.hms_room_id ?? null,
       };
     })
     .filter(
@@ -167,8 +202,10 @@ export async function GET(req: NextRequest) {
         ends_at: string;
         status: string;
         host_id: string;
+        host_display_name: string;
         participant_count: number;
         max_participants: number;
+        room_id: string | null;
       } => Boolean(row),
     );
 
