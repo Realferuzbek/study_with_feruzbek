@@ -1,5 +1,5 @@
 import "./globals.css";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import NextTopLoader from "nextjs-toploader";
 import type { ReactNode } from "react";
 import { SpeedInsights } from "@vercel/speed-insights/next";
@@ -83,11 +83,14 @@ export const metadata: Metadata = {
     shortcut: ["/logo.svg"],
   },
   manifest: "/manifest.json",
-  themeColor: "#07070b",
   robots: { index: true, follow: true },
   verification: {
     google: GOOGLE_SITE_VERIFICATION,
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#07070b",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -98,7 +101,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           name="google-site-verification"
           content={GOOGLE_SITE_VERIFICATION}
         />
-        <meta name="theme-color" content="#07070b" />
       </head>
       <body className="font-sans bg-[#07070b] text-white">
         <Providers>
