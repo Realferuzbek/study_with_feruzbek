@@ -354,6 +354,81 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
     }
   }, [pendingCancelSessionId, sessions]);
 
+  const handleBookClick = useCallback(() => {
+    if (!user?.id) {
+      redirectToSignin("book");
+      return;
+    }
+    setNotice("Drag on the calendar to book your session.");
+    setFocusSignal((prev) => prev + 1);
+  }, [redirectToSignin, user?.id]);
+
+  const handleJoinSession = useCallback(
+    async (session: StudioBooking) => {
+      if (!session?.id) return;
+      if (!user?.id) {
+        redirectToSignin("join", session.id);
+        return;
+      }
+      if (joiningSessionId && joiningSessionId !== session.id) return;
+      setJoiningSessionId(session.id);
+      try {
+        const res = await csrfFetch(
+          `/api/focus-sessions/${session.id}/token`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          },
+        );
+        const text = await res.text().catch(() => "");
+        if (!res.ok) {
+          const payload = text
+            ? (() => {
+                try {
+                  return JSON.parse(text);
+                } catch {
+                  return null;
+                }
+              })()
+            : null;
+          const message = payload?.error ?? "Unable to join session.";
+          console.error("[focus sessions] join failed", res.status, text);
+          setNotice(message);
+          return;
+        }
+        const payload = text
+          ? (() => {
+              try {
+                return JSON.parse(text);
+              } catch {
+                return null;
+              }
+            })()
+          : null;
+        const token = payload?.token;
+        if (!token) {
+          console.error("[focus sessions] join token missing", res.status, text);
+          setNotice("Unable to join session.");
+          return;
+        }
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(
+            `focus-session-token:${session.id}`,
+            token,
+          );
+        }
+        router.push(`/feature/live/session/${session.id}`);
+      } catch (err) {
+        console.error(err);
+        setNotice("Unable to join session.");
+      } finally {
+        setJoiningSessionId(null);
+      }
+    },
+    [joiningSessionId, redirectToSignin, router, user?.id],
+  );
+
   useEffect(() => {
     if (!intent || !user?.id) return;
     const key = `${intent}:${intentSessionId ?? ""}`;
@@ -553,18 +628,9 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
       updateRangeSessions,
       user?.id,
       visibleRange,
-      visibleRangeKey,
+    visibleRangeKey,
     ],
   );
-
-  const handleBookClick = useCallback(() => {
-    if (!user?.id) {
-      redirectToSignin("book");
-      return;
-    }
-    setNotice("Drag on the calendar to book your session.");
-    setFocusSignal((prev) => prev + 1);
-  }, [redirectToSignin, user?.id]);
 
   const selectedSession = useMemo(
     () => sessions.find((session) => session.id === selectedSessionId) ?? null,
@@ -696,72 +762,6 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
       user?.id,
       visibleRange,
     ],
-  );
-
-  const handleJoinSession = useCallback(
-    async (session: StudioBooking) => {
-      if (!session?.id) return;
-      if (!user?.id) {
-        redirectToSignin("join", session.id);
-        return;
-      }
-      if (joiningSessionId && joiningSessionId !== session.id) return;
-      setJoiningSessionId(session.id);
-      try {
-        const res = await csrfFetch(
-          `/api/focus-sessions/${session.id}/token`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
-          },
-        );
-        const text = await res.text().catch(() => "");
-        if (!res.ok) {
-          const payload = text
-            ? (() => {
-                try {
-                  return JSON.parse(text);
-                } catch {
-                  return null;
-                }
-              })()
-            : null;
-          const message = payload?.error ?? "Unable to join session.";
-          console.error("[focus sessions] join failed", res.status, text);
-          setNotice(message);
-          return;
-        }
-        const payload = text
-          ? (() => {
-              try {
-                return JSON.parse(text);
-              } catch {
-                return null;
-              }
-            })()
-          : null;
-        const token = payload?.token;
-        if (!token) {
-          console.error("[focus sessions] join token missing", res.status, text);
-          setNotice("Unable to join session.");
-          return;
-        }
-        if (typeof window !== "undefined") {
-          window.sessionStorage.setItem(
-            `focus-session-token:${session.id}`,
-            token,
-          );
-        }
-        router.push(`/feature/live/session/${session.id}`);
-      } catch (err) {
-        console.error(err);
-        setNotice("Unable to join session.");
-      } finally {
-        setJoiningSessionId(null);
-      }
-    },
-    [joiningSessionId, redirectToSignin, router, user?.id],
   );
 
   return (
