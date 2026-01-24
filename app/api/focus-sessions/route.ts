@@ -91,7 +91,7 @@ export async function GET(req: NextRequest) {
   const { data, error } = await sb
     .from("focus_sessions")
     .select(
-      "id, creator_user_id, starts_at, ends_at, duration_minutes, task, status, max_participants",
+      "id, creator_user_id, starts_at, ends_at, duration_minutes, task, status, max_participants, hms_room_id",
     )
     .gte("starts_at", from.toISOString())
     .lte("starts_at", to.toISOString())
