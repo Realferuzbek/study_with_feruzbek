@@ -1,40 +1,10 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { DateTime } from "luxon";
-import { MOTIVATION_QUOTES, MOTIVATION_COUNT } from "@/data/motivations";
+import { getTodayMotivationSnapshot } from "@/lib/motivation/today";
 import Navbar from "@/components/Navbar";
 import { getCachedSession } from "@/lib/server-session";
 import { getLanguageOptions, getTranslations } from "@/lib/i18n";
-
-const TASHKENT_ZONE = "Asia/Tashkent";
-const ANCHOR_DATE_ISO = "2025-01-01";
-
-type RotationSnapshot = {
-  dateLabel: string;
-  quote: string;
-  index: number;
-};
-
-function computeRotation(target: DateTime): { index: number; cycle: number } {
-  const anchor = DateTime.fromISO(ANCHOR_DATE_ISO, {
-    zone: TASHKENT_ZONE,
-  }).startOf("day");
-  const daysOffset = Math.floor(
-    target.startOf("day").diff(anchor, "days").days,
-  );
-  const normalized =
-    ((daysOffset % MOTIVATION_COUNT) + MOTIVATION_COUNT) % MOTIVATION_COUNT;
-  const cycle = Math.floor(daysOffset / MOTIVATION_COUNT) + 1;
-  return { index: normalized, cycle };
-}
-
-function buildSnapshot(target: DateTime): RotationSnapshot {
-  const { index } = computeRotation(target);
-  const quote = MOTIVATION_QUOTES[index];
-  const dateLabel = target.toFormat("cccc, d LLLL");
-  return { dateLabel, quote, index };
-}
 
 export default async function MotivationVaultFeature() {
   const session = await getCachedSession();
@@ -44,8 +14,7 @@ export default async function MotivationVaultFeature() {
   const { locale, t } = getTranslations();
   const languageOptions = getLanguageOptions(locale);
 
-  const now = DateTime.now().setZone(TASHKENT_ZONE);
-  const today = buildSnapshot(now);
+  const today = getTodayMotivationSnapshot();
 
   return (
     <div className="relative min-h-[100dvh] overflow-hidden bg-[#05030d] text-white">

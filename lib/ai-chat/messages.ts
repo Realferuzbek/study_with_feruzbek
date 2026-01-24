@@ -55,6 +55,12 @@ const ADMIN_REFUSAL_RESPONSES: Record<SupportedLanguage, string[]> = {
   ru: ["I can't access admin-only or internal system info."],
 };
 
+const SIGN_IN_REQUIRED_RESPONSES: Record<SupportedLanguage, string[]> = {
+  en: ["Please sign in to see your personal StudyMate info."],
+  uz: ["Shaxsiy StudyMate ma'lumotlari uchun tizimga kiring."],
+  ru: ["Войдите в аккаунт, чтобы увидеть личные данные StudyMate."],
+};
+
 const LEADERBOARD_MISSING_DATE: Record<SupportedLanguage, string[]> = {
   en: [
     "I can check a leaderboard snapshot if you share a date (YYYY-MM-DD).",
@@ -112,6 +118,10 @@ export function getPersonalDataRefusalResponse(language: SupportedLanguage) {
 
 export function getAdminRefusalResponse(language: SupportedLanguage) {
   return pick(ADMIN_REFUSAL_RESPONSES, language);
+}
+
+export function getSignInRequiredResponse(language: SupportedLanguage) {
+  return pick(SIGN_IN_REQUIRED_RESPONSES, language);
 }
 
 export function getLeaderboardMissingDateResponse(

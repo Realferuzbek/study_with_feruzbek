@@ -1,4 +1,6 @@
 import * as cheerio from "cheerio";
+import { promises as fs } from "fs";
+import path from "path";
 import { embedBatch } from "./ai";
 import { env, numeric, arrays } from "./env";
 import { SnippetMeta, vector } from "./vector";
@@ -112,6 +114,10 @@ export async function reindexSite(): Promise<IndexStats> {
     depth += 1;
   }
 
+  const localStats = await indexLocalDocs();
+  pagesFetched += localStats.docsIndexed;
+  chunksIndexed += localStats.chunksIndexed;
+
   const finishedAt = new Date().toISOString();
   return { pagesFetched, chunksIndexed, startedAt, finishedAt };
 }
@@ -201,6 +207,76 @@ function extractTextAndTitle(html: string) {
     .replace(/\u00a0/g, " ")
     .trim();
   return { title, text };
+}
+
+async function indexLocalDocs(): Promise<{
+  docsIndexed: number;
+  chunksIndexed: number;
+}> {
+  const docsDir = path.join(process.cwd(), "content", "ai");
+  let entries: Array<import("fs").Dirent> = [];
+  try {
+    entries = await fs.readdir(docsDir, { withFileTypes: true });
+  } catch {
+    return { docsIndexed: 0, chunksIndexed: 0 };
+  }
+
+  const markdownFiles = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => entry.name);
+
+  if (!markdownFiles.length) {
+    return { docsIndexed: 0, chunksIndexed: 0 };
+  }
+
+  let docsIndexed = 0;
+  let chunksIndexed = 0;
+
+  for (const filename of markdownFiles) {
+    try {
+      const filePath = path.join(docsDir, filename);
+      const raw = await fs.readFile(filePath, "utf8");
+      const cleaned = stripFrontMatter(raw);
+      const title = extractMarkdownTitle(cleaned, filename);
+      const text = cleaned.replace(/\s+/g, " ").trim();
+      const chunks = chunk(text);
+      if (!chunks.length) continue;
+
+      const embeddings = await embedBatch(chunks);
+      const now = new Date().toISOString();
+      const payloads = embeddings.map((vec, i) => ({
+        id: `local://${filename}#${i}`,
+        vector: vec,
+        metadata: {
+          url: `local://${filename}#${i}`,
+          title,
+          chunk: chunks[i],
+          chunkIndex: i,
+          indexedAt: now,
+        } as SnippetMeta,
+      }));
+      await vector.upsert(payloads);
+      docsIndexed += 1;
+      chunksIndexed += chunks.length;
+    } catch {
+      // ignore local doc failures
+    }
+  }
+
+  return { docsIndexed, chunksIndexed };
+}
+
+function stripFrontMatter(content: string) {
+  if (!content.startsWith("---")) return content;
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) return content;
+  return content.slice(end + 4);
+}
+
+function extractMarkdownTitle(content: string, fallbackFilename: string) {
+  const match = content.match(/^#\s+(.+)$/m);
+  if (match && match[1]) return match[1].trim();
+  return fallbackFilename.replace(/\.md$/i, "");
 }
 
 function chunk(text: string): string[] {
