@@ -198,10 +198,16 @@ export default function ChatWidget() {
     try {
       const res = await fetch("/api/chat/status", { cache: "no-store" });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok || typeof body?.enabled !== "boolean") {
+      const liveFlag =
+        typeof body?.live === "boolean"
+          ? body.live
+          : typeof body?.enabled === "boolean"
+            ? body.enabled
+            : null;
+      if (!res.ok || typeof liveFlag !== "boolean") {
         throw new Error(body?.error || "status unavailable");
       }
-      const nextStatus: AiStatus = body.enabled ? "online" : "disabled";
+      const nextStatus: AiStatus = liveFlag ? "online" : "disabled";
       setAiStatus(nextStatus);
       return nextStatus;
     } catch (error) {

@@ -61,6 +61,18 @@ const SIGN_IN_REQUIRED_RESPONSES: Record<SupportedLanguage, string[]> = {
   ru: ["Войдите в аккаунт, чтобы увидеть личные данные StudyMate."],
 };
 
+const NOT_INDEXED_YET_RESPONSES: Record<SupportedLanguage, string[]> = {
+  en: [
+    "I do not have enough StudyMate context indexed yet. Please try again in a minute or ask an admin to reindex.",
+  ],
+  uz: [
+    "StudyMate bo‘yicha yetarli kontekst hali indekslanmagan. Bir daqiqadan keyin yana urinib ko‘ring yoki admindan reindeks so‘rang.",
+  ],
+  ru: [
+    "Пока не хватает индексированного контекста по StudyMate. Попробуйте ещё раз через минуту или попросите админа запустить реиндекс.",
+  ],
+};
+
 const LEADERBOARD_MISSING_DATE: Record<SupportedLanguage, string[]> = {
   en: [
     "I can check a leaderboard snapshot if you share a date (YYYY-MM-DD).",
@@ -122,6 +134,10 @@ export function getAdminRefusalResponse(language: SupportedLanguage) {
 
 export function getSignInRequiredResponse(language: SupportedLanguage) {
   return pick(SIGN_IN_REQUIRED_RESPONSES, language);
+}
+
+export function getNotIndexedYetResponse(language: SupportedLanguage) {
+  return pick(NOT_INDEXED_YET_RESPONSES, language);
 }
 
 export function getLeaderboardMissingDateResponse(

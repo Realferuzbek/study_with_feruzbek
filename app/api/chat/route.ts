@@ -13,6 +13,7 @@ import {
   getOffTopicResponse,
   getAdminRefusalResponse,
   getSignInRequiredResponse,
+  getNotIndexedYetResponse,
 } from "@/lib/ai-chat/messages";
 import {
   isLeaderboardIntent,
@@ -45,6 +46,7 @@ import {
 } from "@/lib/ai-chat/router";
 import { embedBatch, generateAnswer } from "@/lib/rag/ai";
 import { vector, type SnippetMeta } from "@/lib/rag/vector";
+import { getLocalDocContexts } from "@/lib/rag/localDocs";
 import { rateLimit } from "@/lib/rateLimit";
 import { isAiChatEnabled } from "@/lib/featureFlags";
 
@@ -232,7 +234,7 @@ export async function POST(req: Request) {
       const toolSnippet = buildToolSnippet(toolName, toolResult);
       const toolContext = buildToolContext(toolName, toolSnippet);
 
-      const toolRetrieval = await queryContexts(embedding, {
+      const toolRetrieval = await queryContexts(inputRaw, embedding, {
         allowFailure: true,
       });
       const ragContexts =
@@ -354,7 +356,7 @@ export async function POST(req: Request) {
 
     let retrieval: Awaited<ReturnType<typeof queryContexts>>;
     try {
-      retrieval = await queryContexts(embedding);
+      retrieval = await queryContexts(inputRaw, embedding);
     } catch (error) {
       console.error("[api/chat] vector query failed", error);
       return NextResponse.json(
@@ -365,10 +367,8 @@ export async function POST(req: Request) {
 
     const { contexts, bestScore, retrievalMs } = retrieval;
 
-    const confident = contexts.length > 0 && bestScore >= SIMILARITY_THRESHOLD;
-
-    if (!confident) {
-      const reply = getOffTopicResponse(language);
+    if (!contexts.length) {
+      const reply = getNotIndexedYetResponse(language);
       await persistLog({
         userId: viewerId,
         sessionId,
@@ -377,7 +377,7 @@ export async function POST(req: Request) {
         reply,
         usedRag: false,
         metadata: {
-          reason: "off_topic",
+          reason: "not_indexed",
           matches: contexts.length,
           bestScore,
           embedMs,
@@ -544,6 +544,12 @@ function buildToolSnippet(toolName: ToolName, payload: any): ToolSnippet {
       };
     }
     case "TOOL_LIVE_SESSIONS": {
+      if (payload?.error) {
+        return {
+          title: "Live sessions",
+          text: "Live sessions are unavailable right now. Please try again soon.",
+        };
+      }
       const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [];
       if (!sessions.length) {
         return {
@@ -674,10 +680,14 @@ function buildToolContext(toolName: ToolName, snippet: ToolSnippet): SnippetMeta
 }
 
 async function queryContexts(
+  input: string,
   embedding: number[],
   options?: { allowFailure?: boolean },
 ): Promise<{ contexts: SnippetMeta[]; bestScore: number; retrievalMs: number }> {
   const retrievalStart = performance.now();
+  let contexts: SnippetMeta[] = [];
+  let bestScore = 0;
+  let vectorFailed = false;
   try {
     const result: any = await vector.query({
       vector: embedding,
@@ -699,22 +709,44 @@ async function queryContexts(
     const sortedMatches = [...validMatches].sort(
       (a, b) => (b.score ?? 0) - (a.score ?? 0),
     );
-    const bestScore = sortedMatches.length
+    bestScore = sortedMatches.length
       ? (sortedMatches[0]?.score as number)
       : 0;
-    const contexts = sortedMatches
+    contexts = sortedMatches
       .slice(0, TOP_K)
       .map((match) => match.metadata as SnippetMeta);
-    const retrievalMs = performance.now() - retrievalStart;
-    return { contexts, bestScore, retrievalMs };
   } catch (error) {
+    vectorFailed = true;
     if (!options?.allowFailure) {
-      throw error;
+      console.warn("[api/chat] vector query failed", error);
     }
-    console.warn("[api/chat] vector query failed", error);
-    const retrievalMs = performance.now() - retrievalStart;
-    return { contexts: [], bestScore: 0, retrievalMs };
   }
+
+  if (!contexts.length) {
+    const localMatches = await getLocalDocContexts(input);
+    if (localMatches.length) {
+      bestScore = Math.max(...localMatches.map((match) => match.similarity));
+      contexts = localMatches.map((match, index) => ({
+        url: match.url ?? `local-docs://${match.id}`,
+        title: match.title,
+        chunk: match.chunk,
+        chunkIndex: resolveChunkIndex(match.id, index),
+        indexedAt: new Date().toISOString(),
+      }));
+    } else if (vectorFailed && !options?.allowFailure) {
+      console.warn("[api/chat] vector query failed with no local fallback");
+    }
+  }
+
+  const retrievalMs = performance.now() - retrievalStart;
+  return { contexts, bestScore, retrievalMs };
+}
+
+function resolveChunkIndex(id: string, fallback: number) {
+  const hashIndex = id.lastIndexOf("#");
+  if (hashIndex === -1) return fallback;
+  const raw = Number(id.slice(hashIndex + 1));
+  return Number.isFinite(raw) ? raw : fallback;
 }
 
 async function persistLog(params: {

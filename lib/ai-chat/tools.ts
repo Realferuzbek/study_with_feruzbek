@@ -29,6 +29,7 @@ export type LiveSessionPublic = {
 
 export type LiveSessionsPublicResult = {
   sessions: LiveSessionPublic[];
+  error?: string;
 };
 
 export type LeaderboardTopNowResult = {
@@ -116,27 +117,33 @@ export async function getLiveSessionsPublic(
   const nowDate = now instanceof Date ? now : new Date(now);
   const nowMs = nowDate.getTime();
   if (!Number.isFinite(nowMs)) {
-    return { sessions: [] };
+    return { sessions: [], error: "invalid_time" };
   }
 
   const scanStart = new Date(nowMs - SESSION_SCAN_HOURS * 60 * 60 * 1000);
   const scanEnd = new Date(nowMs + SESSION_SCAN_HOURS * 60 * 60 * 1000);
 
-  const sb = supabaseAdmin();
-  const { data, error } = await sb
-    .from("focus_sessions")
-    .select(
-      "id, creator_user_id, starts_at, ends_at, duration_minutes, status, task, title",
-    )
-    .gte("starts_at", scanStart.toISOString())
-    .lte("starts_at", scanEnd.toISOString())
-    .in("status", ["scheduled", "active"])
-    .order("starts_at", { ascending: true })
-    .limit(80);
-
-  if (error) {
+  let data: unknown = null;
+  try {
+    const sb = supabaseAdmin();
+    const response = await sb
+      .from("focus_sessions")
+      .select(
+        "id, creator_user_id, starts_at, ends_at, duration_minutes, status, task, title",
+      )
+      .gte("starts_at", scanStart.toISOString())
+      .lte("starts_at", scanEnd.toISOString())
+      .in("status", ["scheduled", "active"])
+      .order("starts_at", { ascending: true })
+      .limit(80);
+    data = response.data;
+    if (response.error) {
+      console.error("[ai-chat] live sessions lookup failed", response.error);
+      return { sessions: [], error: "lookup_failed" };
+    }
+  } catch (error) {
     console.error("[ai-chat] live sessions lookup failed", error);
-    return { sessions: [] };
+    return { sessions: [], error: "lookup_failed" };
   }
 
   const sessions = (data ?? []) as FocusSessionRow[];

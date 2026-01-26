@@ -15,6 +15,28 @@ type DiagnosticsPayload = {
     indexName: string;
     vectorDim: number | null;
   };
+  ragEnv: {
+    siteBaseUrlPresent: boolean;
+    indexerSecretPresent: boolean;
+    upstashUrlPresent: boolean;
+    upstashTokenPresent: boolean;
+    openaiKeyPresent: boolean;
+  };
+  supabase: {
+    serverHost: string | null;
+    publicHost: string | null;
+    mismatch: boolean;
+    serverSource: "NEXT_PUBLIC_SUPABASE_URL" | "SUPABASE_URL" | null;
+  };
+  indexing: {
+    mode: "supabase" | "memory" | "disabled";
+    lastError?: string;
+    lastReindexedAt?: string | null;
+  };
+  localDocs: {
+    files: number;
+    chunks: number;
+  };
   featureFlags: {
     aiChatEnabled: boolean;
   };
@@ -85,6 +107,7 @@ export default function AdminAiDiagnostics() {
   }, [refresh]);
 
   const lastUpdated = formatTimestamp(diagnostics?.timestamp);
+  const lastReindex = formatTimestamp(diagnostics?.indexing?.lastReindexedAt);
 
   return (
     <section className="rounded-2xl border border-white/10 bg-[#0f0f18]/90 p-6 shadow-[0_18px_45px_-24px_rgba(140,122,245,0.35)]">
@@ -248,6 +271,150 @@ export default function AdminAiDiagnostics() {
                     <dd className="text-white">{lastUpdated}</dd>
                   </div>
                 )}
+              </dl>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold uppercase tracking-[0.25em] text-white/70">
+                  RAG env
+                </h3>
+                <StatusBadge
+                  ok={
+                    diagnostics.ragEnv.siteBaseUrlPresent &&
+                    diagnostics.ragEnv.indexerSecretPresent &&
+                    diagnostics.ragEnv.upstashUrlPresent &&
+                    diagnostics.ragEnv.upstashTokenPresent &&
+                    diagnostics.ragEnv.openaiKeyPresent
+                  }
+                  label={
+                    diagnostics.ragEnv.siteBaseUrlPresent &&
+                    diagnostics.ragEnv.indexerSecretPresent &&
+                    diagnostics.ragEnv.upstashUrlPresent &&
+                    diagnostics.ragEnv.upstashTokenPresent &&
+                    diagnostics.ragEnv.openaiKeyPresent
+                      ? "Ready"
+                      : "Missing"
+                  }
+                />
+              </div>
+              <dl className="mt-4 space-y-2 text-sm text-white/80">
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">SITE_BASE_URL</dt>
+                  <dd>
+                    {diagnostics.ragEnv.siteBaseUrlPresent
+                      ? "Detected"
+                      : "Missing"}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">INDEXER_SECRET</dt>
+                  <dd>
+                    {diagnostics.ragEnv.indexerSecretPresent
+                      ? "Detected"
+                      : "Missing"}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">Upstash URL</dt>
+                  <dd>
+                    {diagnostics.ragEnv.upstashUrlPresent
+                      ? "Detected"
+                      : "Missing"}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">Upstash token</dt>
+                  <dd>
+                    {diagnostics.ragEnv.upstashTokenPresent
+                      ? "Detected"
+                      : "Missing"}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">OpenAI key</dt>
+                  <dd>
+                    {diagnostics.ragEnv.openaiKeyPresent
+                      ? "Detected"
+                      : "Missing"}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold uppercase tracking-[0.25em] text-white/70">
+                  Supabase
+                </h3>
+                <StatusBadge
+                  ok={!diagnostics.supabase.mismatch}
+                  label={diagnostics.supabase.mismatch ? "Mismatch" : "OK"}
+                />
+              </div>
+              <dl className="mt-4 space-y-2 text-sm text-white/80">
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">Server host</dt>
+                  <dd className="text-white">
+                    {diagnostics.supabase.serverHost ?? "—"}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">Public host</dt>
+                  <dd className="text-white">
+                    {diagnostics.supabase.publicHost ?? "—"}
+                  </dd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">Source</dt>
+                  <dd className="text-white">
+                    {diagnostics.supabase.serverSource ?? "—"}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold uppercase tracking-[0.25em] text-white/70">
+                  Indexing
+                </h3>
+                <StatusBadge
+                  ok={diagnostics.indexing.mode !== "disabled"}
+                  label={diagnostics.indexing.mode}
+                />
+              </div>
+              <dl className="mt-4 space-y-2 text-sm text-white/80">
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">Last reindex</dt>
+                  <dd className="text-white">{lastReindex ?? "—"}</dd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">Last error</dt>
+                  <dd className="text-white">
+                    {diagnostics.indexing.lastError ?? "—"}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <h3 className="text-sm font-semibold uppercase tracking-[0.25em] text-white/70">
+                Local docs
+              </h3>
+              <dl className="mt-4 space-y-2 text-sm text-white/80">
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">Files loaded</dt>
+                  <dd className="text-white">{diagnostics.localDocs.files}</dd>
+                </div>
+                <div className="flex items-center justify-between">
+                  <dt className="text-white/60">Chunks</dt>
+                  <dd className="text-white">{diagnostics.localDocs.chunks}</dd>
+                </div>
               </dl>
             </div>
           </div>

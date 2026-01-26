@@ -161,6 +161,11 @@ export async function routeIntent(
     }
   }
 
+  const keywordTool = routeByKeyword(trimmed);
+  if (keywordTool) {
+    return { kind: "tool", tool: keywordTool, source: "fallback" };
+  }
+
   return { kind: "rag", source: "fallback" };
 }
 
@@ -248,6 +253,82 @@ function extractJson(text: string) {
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) return "";
   return text.slice(start, end + 1);
+}
+
+const KEYWORD_TOOL_RULES: Array<{
+  tool: ToolName;
+  patterns: RegExp[];
+}> = [
+  {
+    tool: "TOOL_TODAYS_MANTRA",
+    patterns: [
+      /\btoday.?s mantra\b/i,
+      /\bmantra for today\b/i,
+      /\bdaily (mantra|motivation|quote)\b/i,
+      /\bquote of the day\b/i,
+      /\btoday.?s (motivation|quote)\b/i,
+    ],
+  },
+  {
+    tool: "TOOL_LIVE_SESSIONS",
+    patterns: [
+      /\blive now\b/i,
+      /\bright now\b.*\blive\b/i,
+      /\bwho is live\b/i,
+      /\bsessions?\s+live\b.*\bnow\b/i,
+      /\bjoinable sessions?\b/i,
+      /\blive rooms?\b.*\bnow\b/i,
+    ],
+  },
+  {
+    tool: "TOOL_LEADERBOARD_TOP_NOW",
+    patterns: [
+      /\bleaderboard\b.*\b(now|today|current)\b/i,
+      /\b(top|leaders?)\b.*\bleaderboard\b.*\b(now|today|current)\b/i,
+      /\bleaderboard top\b.*\b(now|today|current)\b/i,
+    ],
+  },
+  {
+    tool: "TOOL_MY_TASKS_TODAY",
+    patterns: [
+      /\bmy\b.*\btasks?\b/i,
+      /\btasks?\b.*\btoday\b.*\bme\b/i,
+    ],
+  },
+  {
+    tool: "TOOL_MY_NEXT_SESSION",
+    patterns: [
+      /\bmy next session\b/i,
+      /\bnext booked session\b/i,
+      /\bnext session i\b/i,
+      /\bupcoming session\b.*\bme\b/i,
+    ],
+  },
+  {
+    tool: "TOOL_MY_STREAK",
+    patterns: [
+      /\bmy streak\b/i,
+      /\bcurrent streak\b/i,
+      /\bstreak status\b/i,
+    ],
+  },
+  {
+    tool: "TOOL_MY_WEEK_SUMMARY",
+    patterns: [
+      /\bmy week(ly)? summary\b/i,
+      /\bwhat did i do this week\b/i,
+      /\bthis week'?s progress\b/i,
+    ],
+  },
+];
+
+function routeByKeyword(input: string): ToolName | null {
+  for (const rule of KEYWORD_TOOL_RULES) {
+    if (rule.patterns.some((pattern) => pattern.test(input))) {
+      return rule.tool;
+    }
+  }
+  return null;
 }
 
 async function routeByEmbedding(
