@@ -124,8 +124,9 @@ export async function getLiveSessionsPublic(
   const scanEnd = new Date(nowMs + SESSION_SCAN_HOURS * 60 * 60 * 1000);
 
   let data: unknown = null;
+  let sb: ReturnType<typeof supabaseAdmin> | null = null;
   try {
-    const sb = supabaseAdmin();
+    sb = supabaseAdmin();
     const response = await sb
       .from("focus_sessions")
       .select(
@@ -156,7 +157,7 @@ export async function getLiveSessionsPublic(
   );
   const hostMap = new Map<string, HostProfile>();
 
-  if (hostIds.length > 0) {
+  if (hostIds.length > 0 && sb) {
     const { data: hosts, error: hostError } = await sb
       .from("users")
       .select("id, display_name, name")

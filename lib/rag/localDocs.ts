@@ -53,7 +53,7 @@ const STOP_WORDS = new Set([
 type LocalDocChunk = {
   id: string;
   title: string;
-  url?: string;
+  url: string | undefined;
   chunk: string;
   similarity: number;
 };
