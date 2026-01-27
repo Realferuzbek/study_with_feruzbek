@@ -116,6 +116,9 @@ function isPublic(req: NextRequest) {
   if (isAdminPath(pathname)) return false;
   if (pathname === "/") return true;
   if (pathname === "/feature/live" || pathname === "/feature/live/") return true;
+  if (pathname.startsWith("/api/focus-sessions") && req.method === "GET") {
+    return true;
+  }
   if (pathname === "/api/chat") return true;
   if (pathname === "/api/chat/status") return true;
   if (pathname === "/api/chat/rating") return true;

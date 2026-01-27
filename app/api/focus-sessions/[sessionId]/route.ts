@@ -38,7 +38,7 @@ async function cancelSession(req: NextRequest, context: RouteContext) {
   const sb = supabaseAdmin();
   const { data, error } = await sb
     .from("focus_sessions")
-    .select("id, creator_user_id, starts_at, status")
+    .select("id, host_id, start_at, status")
     .eq("id", sessionId)
     .maybeSingle();
 
@@ -54,11 +54,11 @@ async function cancelSession(req: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
 
-  if (data.creator_user_id !== user.id) {
+  if (data.host_id !== user.id) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const startsAt = new Date(data.starts_at);
+  const startsAt = new Date(data.start_at);
   if (Number.isNaN(startsAt.valueOf())) {
     return NextResponse.json(
       { error: "Session time is invalid" },
@@ -81,7 +81,7 @@ async function cancelSession(req: NextRequest, context: RouteContext) {
     .from("focus_sessions")
     .update({ status: "cancelled" })
     .eq("id", sessionId)
-    .select("id, status, starts_at, ends_at, creator_user_id")
+    .select("id, status, start_at, end_at, host_id")
     .single();
 
   if (updateError) {

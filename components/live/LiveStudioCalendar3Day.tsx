@@ -33,6 +33,8 @@ type LiveStudioCalendar3DayProps = {
   selectedBookingId?: string | null;
   onRangeChange?: (range: { from: Date; to: Date }) => void;
   notice?: string | null;
+  error?: string | null;
+  onRetry?: () => void;
   isLoading?: boolean;
   isReadOnly?: boolean;
   user?: {
@@ -144,6 +146,8 @@ export default function LiveStudioCalendar3Day({
   selectedBookingId,
   onRangeChange,
   notice,
+  error,
+  onRetry,
   isLoading = false,
   isReadOnly = false,
   user,
@@ -408,8 +412,22 @@ export default function LiveStudioCalendar3Day({
 
         <div className="flex flex-wrap items-center gap-2">
           {notice ? (
-            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-500">
+            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 py-1 text-xs font-semibold text-[var(--studio-muted)]">
               {notice}
+            </div>
+          ) : null}
+          {error && !isLoading ? (
+            <div className="inline-flex items-center gap-2 rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-500">
+              <span>{error}</span>
+              {onRetry ? (
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  className="rounded-full border border-rose-500/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]"
+                >
+                  Retry
+                </button>
+              ) : null}
             </div>
           ) : null}
           {isLoading ? (

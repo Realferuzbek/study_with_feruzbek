@@ -17,13 +17,13 @@ type RouteContext = {
 
 type FocusSessionRow = {
   id: string;
-  hms_room_id?: string | null;
-  starts_at: string;
-  ends_at?: string | null;
+  room_id?: string | null;
+  start_at: string;
+  end_at?: string | null;
   duration_minutes?: number | null;
   status?: string | null;
   max_participants?: number | null;
-  creator_user_id?: string | null;
+  host_id?: string | null;
 };
 
 export async function POST(_req: NextRequest, context: RouteContext) {
@@ -42,7 +42,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
   const { data, error } = await sb
     .from("focus_sessions")
     .select(
-      "id, hms_room_id, starts_at, ends_at, duration_minutes, status, max_participants, creator_user_id",
+      "id, room_id, start_at, end_at, duration_minutes, status, max_participants, host_id",
     )
     .eq("id", sessionId)
     .maybeSingle();
@@ -61,9 +61,9 @@ export async function POST(_req: NextRequest, context: RouteContext) {
 
   const focusSession = data as FocusSessionRow;
 
-  const startsAt = new Date(focusSession.starts_at);
-  const endsAt = focusSession.ends_at
-    ? new Date(focusSession.ends_at)
+  const startsAt = new Date(focusSession.start_at);
+  const endsAt = focusSession.end_at
+    ? new Date(focusSession.end_at)
     : new Date(
         startsAt.getTime() +
           (focusSession.duration_minutes ?? 0) * 60 * 1000,
@@ -77,7 +77,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
   }
 
   const status = focusSession.status ?? "scheduled";
-  if (status === "cancelled" || status === "completed") {
+  if (status !== "scheduled") {
     return NextResponse.json(
       { error: "Session is not available" },
       { status: 409 },
@@ -86,7 +86,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
 
   const now = new Date();
   const joinOpenAt = new Date(startsAt.getTime() - 10 * 60 * 1000);
-  const joinCloseAt = new Date(endsAt.getTime() + 5 * 60 * 1000);
 
   if (now < joinOpenAt) {
     return NextResponse.json(
@@ -95,7 +94,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     );
   }
 
-  if (now > joinCloseAt) {
+  if (now > endsAt) {
     return NextResponse.json(
       { error: "Session has ended" },
       { status: 409 },
@@ -111,10 +110,10 @@ export async function POST(_req: NextRequest, context: RouteContext) {
   const { data: hostActive, error: hostActiveError } = await sb
     .from("focus_sessions")
     .select("id")
-    .eq("creator_user_id", user.id)
+    .eq("host_id", user.id)
     .neq("id", sessionId)
-    .lte("starts_at", nowIso)
-    .gt("ends_at", nowIso)
+    .lte("start_at", nowIso)
+    .gt("end_at", nowIso)
     .in("status", ["scheduled", "active"])
     .limit(1);
 
@@ -136,10 +135,10 @@ export async function POST(_req: NextRequest, context: RouteContext) {
   const { data: hostOverlap, error: hostOverlapError } = await sb
     .from("focus_sessions")
     .select("id")
-    .eq("creator_user_id", user.id)
+    .eq("host_id", user.id)
     .neq("id", sessionId)
-    .lt("starts_at", overlapFilter.end)
-    .gt("ends_at", overlapFilter.start)
+    .lt("start_at", overlapFilter.end)
+    .gt("end_at", overlapFilter.start)
     .in("status", ["scheduled", "active"])
     .limit(1);
 
@@ -183,8 +182,8 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       .from("focus_sessions")
       .select("id")
       .in("id", otherParticipantIds)
-      .lte("starts_at", nowIso)
-      .gt("ends_at", nowIso)
+      .lte("start_at", nowIso)
+      .gt("end_at", nowIso)
       .in("status", ["scheduled", "active"])
       .limit(1);
 
@@ -210,8 +209,8 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       .from("focus_sessions")
       .select("id")
       .in("id", otherParticipantIds)
-      .lt("starts_at", overlapFilter.end)
-      .gt("ends_at", overlapFilter.start)
+      .lt("start_at", overlapFilter.end)
+      .gt("end_at", overlapFilter.start)
       .in("status", ["scheduled", "active"])
       .limit(1);
 
@@ -243,7 +242,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     );
   }
 
-  let roomId = focusSession.hms_room_id ?? null;
+  let roomId = focusSession.room_id ?? null;
 
   if (!roomId) {
     const roomName = buildHmsRoomName("focus-session", focusSession.id);
@@ -286,10 +285,10 @@ export async function POST(_req: NextRequest, context: RouteContext) {
 
     const { data: updated, error: updateError } = await sb
       .from("focus_sessions")
-      .update({ hms_room_id: created.id })
+      .update({ room_id: created.id })
       .eq("id", sessionId)
-      .is("hms_room_id", null)
-      .select("hms_room_id")
+      .is("room_id", null)
+      .select("room_id")
       .maybeSingle();
 
     if (updateError) {
@@ -300,16 +299,16 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       );
     }
 
-    if (updated?.hms_room_id) {
-      roomId = updated.hms_room_id;
+    if (updated?.room_id) {
+      roomId = updated.room_id;
     } else {
       const { data: existing, error: existingError } = await sb
         .from("focus_sessions")
-        .select("hms_room_id")
+        .select("room_id")
         .eq("id", sessionId)
         .maybeSingle();
 
-      if (existingError || !existing?.hms_room_id) {
+      if (existingError || !existing?.room_id) {
         console.error("[focus sessions] room lookup failed", existingError);
         return NextResponse.json(
           { error: "Failed to prepare session room" },
@@ -317,7 +316,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
         );
       }
 
-      roomId = existing.hms_room_id;
+      roomId = existing.room_id;
     }
   }
 

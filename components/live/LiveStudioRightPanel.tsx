@@ -116,9 +116,7 @@ export default function LiveStudioRightPanel({
   const joinWindow = useMemo(() => {
     if (!focusedSession) return null;
     const joinOpenAt = new Date(focusedSession.start.getTime() - 10 * 60 * 1000);
-    const joinCloseAt = new Date(
-      focusedSession.end.getTime() + 5 * 60 * 1000,
-    );
+    const joinCloseAt = new Date(focusedSession.end.getTime());
     return { joinOpenAt, joinCloseAt };
   }, [focusedSession]);
 
@@ -133,6 +131,9 @@ export default function LiveStudioRightPanel({
     }
     if (focusedSession.status === "completed") {
       return { label: "Session ended", disabled: true, state: "ended" };
+    }
+    if (focusedSession.status && focusedSession.status !== "scheduled") {
+      return { label: "Session unavailable", disabled: true, state: "unavailable" };
     }
     const maxParticipants = focusedSession.maxParticipants ?? 3;
     const participantCount = focusedSession.participantCount ?? 0;

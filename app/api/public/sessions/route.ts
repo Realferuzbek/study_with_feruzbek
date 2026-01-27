@@ -53,12 +53,12 @@ export async function GET(req: NextRequest) {
   const { data, error } = await sb
     .from("focus_sessions")
     .select(
-      "id, creator_user_id, starts_at, ends_at, duration_minutes, task, status, max_participants, hms_room_id",
+      "id, host_id, start_at, end_at, duration_minutes, task, status, max_participants, room_id",
     )
-    .gte("starts_at", from.toISOString())
-    .lte("starts_at", to.toISOString())
+    .gte("start_at", from.toISOString())
+    .lte("start_at", to.toISOString())
     .in("status", [...ALLOWED_STATUSES])
-    .order("starts_at", { ascending: true });
+    .order("start_at", { ascending: true });
 
   if (error) {
     console.error("[public sessions] list failed", error);
@@ -98,7 +98,7 @@ export async function GET(req: NextRequest) {
   const hostIds = Array.from(
     new Set(
       sessions
-        .map((row) => row.creator_user_id)
+        .map((row) => row.host_id)
         .filter((id): id is string => Boolean(id)),
     ),
   );
@@ -128,9 +128,9 @@ export async function GET(req: NextRequest) {
   const now = new Date();
   const payload = sessions
     .map((row) => {
-      const startsAt = new Date(row.starts_at);
-      const endsAt = row.ends_at
-        ? new Date(row.ends_at)
+      const startsAt = new Date(row.start_at);
+      const endsAt = row.end_at
+        ? new Date(row.end_at)
         : computeEndsAt(startsAt, row.duration_minutes);
       if (Number.isNaN(startsAt.valueOf()) || Number.isNaN(endsAt.valueOf())) {
         return null;
@@ -138,18 +138,18 @@ export async function GET(req: NextRequest) {
       if (endsAt.getTime() < now.getTime()) {
         return null;
       }
-      const hostProfile = hostMap.get(row.creator_user_id) ?? null;
+      const hostProfile = hostMap.get(row.host_id) ?? null;
       return {
         id: row.id,
         session_id: row.id,
-        starts_at: startsAt.toISOString(),
-        ends_at: endsAt.toISOString(),
+        start_at: startsAt.toISOString(),
+        end_at: endsAt.toISOString(),
         task: row.task ?? "desk",
         status: row.status ?? "scheduled",
         max_participants: row.max_participants ?? MAX_PARTICIPANTS,
         participant_count: participantCounts.get(row.id) ?? 0,
         host_display_name: resolveHostDisplayName(hostProfile),
-        room_id: row.hms_room_id ?? null,
+        room_id: row.room_id ?? null,
       };
     })
     .filter(
@@ -158,8 +158,8 @@ export async function GET(req: NextRequest) {
       ): row is {
         id: string;
         session_id: string;
-        starts_at: string;
-        ends_at: string;
+        start_at: string;
+        end_at: string;
         task: string;
         status: string;
         max_participants: number;

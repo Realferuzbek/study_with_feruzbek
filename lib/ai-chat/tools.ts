@@ -8,7 +8,7 @@ import type { LeaderboardEntry } from "@/types/leaderboard";
 
 const TASHKENT_TZ = "Asia/Tashkent";
 const JOIN_OPEN_MINUTES = 10;
-const JOIN_CLOSE_MINUTES = 5;
+const JOIN_CLOSE_MINUTES = 0;
 const SESSION_SCAN_HOURS = 24;
 const DEFAULT_HOST_NAME = "Focus Host";
 
@@ -93,9 +93,9 @@ type HostProfile = {
 
 type FocusSessionRow = {
   id: string;
-  creator_user_id?: string | null;
-  starts_at: string;
-  ends_at?: string | null;
+  host_id?: string | null;
+  start_at: string;
+  end_at?: string | null;
   duration_minutes?: number | null;
   status?: string | null;
   task?: string | null;
@@ -130,12 +130,12 @@ export async function getLiveSessionsPublic(
     const response = await sb
       .from("focus_sessions")
       .select(
-        "id, creator_user_id, starts_at, ends_at, duration_minutes, status, task, title",
+        "id, host_id, start_at, end_at, duration_minutes, status, task, title",
       )
-      .gte("starts_at", scanStart.toISOString())
-      .lte("starts_at", scanEnd.toISOString())
+      .gte("start_at", scanStart.toISOString())
+      .lte("start_at", scanEnd.toISOString())
       .in("status", ["scheduled", "active"])
-      .order("starts_at", { ascending: true })
+      .order("start_at", { ascending: true })
       .limit(80);
     data = response.data;
     if (response.error) {
@@ -151,7 +151,7 @@ export async function getLiveSessionsPublic(
   const hostIds = Array.from(
     new Set(
       sessions
-        .map((row) => row.creator_user_id)
+        .map((row) => row.host_id)
         .filter((id): id is string => Boolean(id)),
     ),
   );
@@ -174,9 +174,9 @@ export async function getLiveSessionsPublic(
   const liveSessions: LiveSessionPublic[] = [];
 
   sessions.forEach((row) => {
-    const startsAt = new Date(row.starts_at);
+    const startsAt = new Date(row.start_at);
     if (Number.isNaN(startsAt.valueOf())) return;
-    const endsAt = resolveEndsAt(startsAt, row.ends_at, row.duration_minutes);
+    const endsAt = resolveEndsAt(startsAt, row.end_at, row.duration_minutes);
     if (!endsAt) return;
 
     const joinOpenAt = new Date(
@@ -188,7 +188,7 @@ export async function getLiveSessionsPublic(
 
     if (nowDate < joinOpenAt || nowDate > joinCloseAt) return;
 
-    const hostProfile = hostMap.get(row.creator_user_id ?? "") ?? null;
+    const hostProfile = hostMap.get(row.host_id ?? "") ?? null;
     liveSessions.push({
       id: row.id,
       topic: row.title ?? row.task ?? null,
@@ -316,12 +316,12 @@ export async function getMyNextBookedSession(
     const { data, error } = await sb
       .from("focus_session_participants")
       .select(
-        "session_id, focus_sessions ( id, starts_at, ends_at, duration_minutes, status, task, title )",
+        "session_id, focus_sessions ( id, start_at, end_at, duration_minutes, status, task, title )",
       )
       .eq("user_id", userId)
-      .gte("focus_sessions.starts_at", nowIso)
+      .gte("focus_sessions.start_at", nowIso)
       .in("focus_sessions.status", ["scheduled", "active"])
-      .order("focus_sessions.starts_at", { ascending: true })
+      .order("focus_sessions.start_at", { ascending: true })
       .limit(1);
 
     if (error) {
@@ -333,11 +333,11 @@ export async function getMyNextBookedSession(
     const session = (row as any)?.focus_sessions as FocusSessionRow | null;
     if (!session) return null;
 
-    const startsAt = new Date(session.starts_at);
+    const startsAt = new Date(session.start_at);
     if (Number.isNaN(startsAt.valueOf())) return null;
     const endsAt = resolveEndsAt(
       startsAt,
-      session.ends_at,
+      session.end_at,
       session.duration_minutes,
     );
     if (!endsAt) return null;
@@ -607,11 +607,11 @@ async function fetchSessionStats(
   const { data, error } = await sb
     .from("focus_session_participants")
     .select(
-      "session_id, focus_sessions ( starts_at, ends_at, duration_minutes, status )",
+      "session_id, focus_sessions ( start_at, end_at, duration_minutes, status )",
     )
     .eq("user_id", userId)
-    .gte("focus_sessions.starts_at", startIso)
-    .lte("focus_sessions.starts_at", endIso);
+    .gte("focus_sessions.start_at", startIso)
+    .lte("focus_sessions.start_at", endIso);
 
   if (error) {
     console.error("[ai-chat] weekly sessions lookup failed", error);
@@ -631,8 +631,8 @@ async function fetchSessionStats(
       focusedMinutes += duration;
       return;
     }
-    const startsAt = new Date(session.starts_at);
-    const endsAt = session.ends_at ? new Date(session.ends_at) : null;
+    const startsAt = new Date(session.start_at);
+    const endsAt = session.end_at ? new Date(session.end_at) : null;
     if (endsAt && !Number.isNaN(startsAt.valueOf()) && !Number.isNaN(endsAt.valueOf())) {
       const diff = (endsAt.getTime() - startsAt.getTime()) / 60_000;
       if (diff > 0) focusedMinutes += diff;

@@ -36,6 +36,7 @@ type SessionCacheEntry = {
   sessions: StudioBooking[];
   isLoading: boolean;
   updatedAt: number;
+  error?: string | null;
 };
 
 type FocusSessionApi = {
@@ -110,7 +111,7 @@ function toStudioBooking(session: FocusSessionApi): StudioBooking | null {
 }
 
 function canAutoJoin(session: StudioBooking) {
-  if (session.status === "cancelled" || session.status === "completed") {
+  if (session.status !== "scheduled") {
     return false;
   }
   const maxParticipants = session.maxParticipants ?? 3;
@@ -120,7 +121,7 @@ function canAutoJoin(session: StudioBooking) {
   }
   const now = Date.now();
   const joinOpenAt = session.start.getTime() - 10 * 60 * 1000;
-  const joinCloseAt = session.end.getTime() + 5 * 60 * 1000;
+  const joinCloseAt = session.end.getTime();
   return now >= joinOpenAt && now <= joinCloseAt;
 }
 
@@ -151,12 +152,12 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   const intentSessionId = searchParams.get("sessionId");
   const handledIntentRef = useRef<string | null>(null);
 
-  const publicCtaLabel = "Continue";
-  const publicHelperText = "You're one click away from joining.";
+  const publicJoinLabel = "Continue to join";
+  const publicJoinHelperText = "You're one step away from joining.";
+  const publicBookLabel = "Continue to book";
+  const publicBookHelperText = "You're one step away from booking.";
 
-  const sessionsEndpoint = isPublic
-    ? "/api/public/sessions"
-    : "/api/focus-sessions";
+  const sessionsEndpoint = "/api/focus-sessions";
   const visibleRangeKey = useMemo(
     () => buildRangeKey(visibleRange),
     [visibleRange],
@@ -168,6 +169,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
     [sessionsEntry?.sessions],
   );
   const isRangeLoading = sessionsEntry?.isLoading ?? false;
+  const sessionsError = sessionsEntry?.error ?? null;
 
   useEffect(() => {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -203,47 +205,6 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
     [router],
   );
 
-  const updateRangeSessions = useCallback(
-    (rangeKey: string, updater: (sessions: StudioBooking[]) => StudioBooking[]) => {
-      setSessionsCache((prev) => {
-        const entry = prev[rangeKey] ?? {
-          sessions: [],
-          isLoading: false,
-          updatedAt: 0,
-        };
-        return {
-          ...prev,
-          [rangeKey]: {
-            ...entry,
-            sessions: sortSessions(updater(entry.sessions)),
-            updatedAt: Date.now(),
-          },
-        };
-      });
-    },
-    [],
-  );
-
-  const updateAllCachedSessions = useCallback(
-    (updater: (session: StudioBooking) => StudioBooking | null) => {
-      setSessionsCache((prev) => {
-        const next: Record<string, SessionCacheEntry> = {};
-        for (const [key, entry] of Object.entries(prev)) {
-          next[key] = {
-            ...entry,
-            sessions: sortSessions(
-              entry.sessions
-                .map((session) => updater(session))
-                .filter((session): session is StudioBooking => Boolean(session)),
-            ),
-          };
-        }
-        return next;
-      });
-    },
-    [],
-  );
-
   const refreshSessions = useCallback(
     async (rangeOverride?: DateRange) => {
       const rangeToUse = rangeOverride ?? visibleRange;
@@ -254,6 +215,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
           sessions: [],
           isLoading: false,
           updatedAt: 0,
+          error: null,
         };
         return {
           ...prev,
@@ -281,8 +243,18 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
             }
           })() : null;
           const message = payload?.error ?? "Failed to load sessions.";
-          setNotice(message);
           console.error("[focus sessions] list failed", res.status, text);
+          setSessionsCache((prev) => {
+            const entry = prev[rangeKey];
+            if (!entry) return prev;
+            return {
+              ...prev,
+              [rangeKey]: {
+                ...entry,
+                error: message,
+              },
+            };
+          });
           return;
         }
         const payload = (await res.json()) as { sessions?: FocusSessionApi[] };
@@ -309,12 +281,23 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
               sessions: sortSessions(mergedSessions),
               isLoading: false,
               updatedAt: Date.now(),
+              error: null,
             },
           };
         });
       } catch (err) {
         console.error(err);
-        setNotice("Failed to load sessions.");
+        setSessionsCache((prev) => {
+          const entry = prev[rangeKey];
+          if (!entry) return prev;
+          return {
+            ...prev,
+            [rangeKey]: {
+              ...entry,
+              error: "Failed to load sessions.",
+            },
+          };
+        });
       } finally {
         setSessionsCache((prev) => {
           const entry = prev[rangeKey];
@@ -527,28 +510,6 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         ? rawDuration
         : durationMinutes;
       const start = next.start;
-      const end = new Date(start.getTime() + resolvedDuration * 60_000);
-      const tempId = `temp-${start.getTime()}-${Math.random()
-        .toString(36)
-        .slice(2, 8)}`;
-      const previousSelection = selectedSessionId;
-      const optimisticBooking: StudioBooking = {
-        id: tempId,
-        task: next.task,
-        start,
-        end,
-        hostId: user?.id ?? null,
-        participantCount: 1,
-        maxParticipants: 3,
-        status: "scheduled",
-        isOptimistic: true,
-      };
-
-      updateRangeSessions(visibleRangeKey, (current) => [
-        ...current,
-        optimisticBooking,
-      ]);
-      setSelectedSessionId(tempId);
       setNotice("Booking session...");
 
       try {
@@ -566,10 +527,6 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
           const text = await res.text().catch(() => "");
           console.error("[focus sessions] booking conflict", res.status, text);
           setNotice("You already have a session booked.");
-          updateRangeSessions(visibleRangeKey, (current) =>
-            current.filter((session) => session.id !== tempId),
-          );
-          setSelectedSessionId(previousSelection);
           return;
         }
         if (!res.ok) {
@@ -586,50 +543,26 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
           const message = payload?.error ?? "Unable to book session.";
           console.error("[focus sessions] booking failed", res.status, text);
           setNotice(message);
-          updateRangeSessions(visibleRangeKey, (current) =>
-            current.filter((session) => session.id !== tempId),
-          );
-          setSelectedSessionId(previousSelection);
           return;
         }
         const payload = (await res.json()) as { id?: string };
-        const payloadId = payload?.id;
+        const payloadId = payload?.id ?? null;
         if (payloadId) {
-          updateRangeSessions(visibleRangeKey, (current) =>
-            current.map((session) =>
-              session.id === tempId
-                ? { ...session, id: payloadId, isOptimistic: false }
-                : session,
-            ),
-          );
           setSelectedSessionId(payloadId);
-        } else {
-          updateRangeSessions(visibleRangeKey, (current) =>
-            current.map((session) =>
-              session.id === tempId ? { ...session, isOptimistic: false } : session,
-            ),
-          );
         }
         setNotice("Session booked.");
         refreshSessions(visibleRange);
       } catch (err) {
         console.error(err);
         setNotice("Unable to book session.");
-        updateRangeSessions(visibleRangeKey, (current) =>
-          current.filter((session) => session.id !== tempId),
-        );
-        setSelectedSessionId(previousSelection);
       }
     },
     [
       durationMinutes,
       redirectToSignin,
       refreshSessions,
-      selectedSessionId,
-      updateRangeSessions,
       user?.id,
       visibleRange,
-    visibleRangeKey,
     ],
   );
 
@@ -676,16 +609,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         redirectToSignin("cancel", sessionId);
         return;
       }
-      const previousByKey: Record<string, StudioBooking | null> = {};
-      for (const [key, entry] of Object.entries(sessionsCache)) {
-        previousByKey[key] =
-          entry.sessions.find((session) => session.id === sessionId) ?? null;
-      }
-      updateAllCachedSessions((session) =>
-        session.id === sessionId
-          ? { ...session, status: "cancelled", isOptimistic: false }
-          : session,
-      );
+      setNotice("Cancelling session...");
       try {
         const res = await csrfFetch(`/api/focus-sessions/${sessionId}`, {
           method: "PATCH",
@@ -705,22 +629,6 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
             : null;
           const message = payload?.error ?? "Unable to cancel session.";
           console.error("[focus sessions] cancel failed", res.status, text);
-          setSessionsCache((prev) => {
-            const next: Record<string, SessionCacheEntry> = {};
-            for (const [key, entry] of Object.entries(prev)) {
-              const previous = previousByKey[key];
-              const sessions = previous
-                ? entry.sessions.map((session) =>
-                    session.id === sessionId ? previous : session,
-                  )
-                : entry.sessions.filter((session) => session.id !== sessionId);
-              next[key] = {
-                ...entry,
-                sessions: sortSessions(sessions),
-              };
-            }
-            return next;
-          });
           setNotice(message);
           return;
         }
@@ -731,22 +639,6 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         refreshSessions(visibleRange);
       } catch (err) {
         console.error(err);
-        setSessionsCache((prev) => {
-          const next: Record<string, SessionCacheEntry> = {};
-          for (const [key, entry] of Object.entries(prev)) {
-            const previous = previousByKey[key];
-            const sessions = previous
-              ? entry.sessions.map((session) =>
-                  session.id === sessionId ? previous : session,
-                )
-              : entry.sessions.filter((session) => session.id !== sessionId);
-            next[key] = {
-              ...entry,
-              sessions: sortSessions(sessions),
-            };
-          }
-          return next;
-        });
         setNotice("Unable to cancel session.");
       } finally {
         setPendingCancelSessionId((prev) =>
@@ -758,8 +650,6 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
       redirectToSignin,
       refreshSessions,
       selectedSessionId,
-      sessionsCache,
-      updateAllCachedSessions,
       user?.id,
       visibleRange,
     ],
@@ -795,8 +685,8 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
               task={task}
               onTaskChange={setTask}
               onBookSession={handleBookClick}
-              primaryLabel={isPublic ? publicCtaLabel : undefined}
-              helperText={isPublic ? publicHelperText : null}
+              primaryLabel={isPublic ? publicBookLabel : undefined}
+              helperText={isPublic ? publicBookHelperText : null}
             />
 
             <LiveStudioCalendar3Day
@@ -806,6 +696,8 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
               onCreateBooking={handleCreateBooking}
               onRangeChange={(range) => setVisibleRange(range)}
               notice={notice}
+              error={sessionsError}
+              onRetry={() => refreshSessions(visibleRange)}
               isLoading={isRangeLoading}
               isReadOnly={isPublic}
               user={{
@@ -833,8 +725,8 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
               upcomingSession={upcomingSessionForPanel}
               upcomingSessions={isPublic ? publicUpcomingSessions : []}
               isPublic={isPublic}
-              publicCtaLabel={publicCtaLabel}
-              publicHelperText={publicHelperText}
+              publicCtaLabel={publicJoinLabel}
+              publicHelperText={publicJoinHelperText}
               onPublicAction={(nextIntent, sessionId) =>
                 redirectToSignin(nextIntent, sessionId)
               }

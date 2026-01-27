@@ -8,6 +8,7 @@ import { buildHmsRoomName, createHmsManagementToken } from "@/lib/voice/hms";
 
 type CreateFocusSessionPayload = {
   starts_at?: string;
+  start_at?: string;
   startsAt?: string;
   duration_minutes?: number;
   durationMinutes?: number;
@@ -63,12 +64,6 @@ function computeEndsAt(startsAt: Date, durationMinutes: number) {
 }
 
 export async function GET(req: NextRequest) {
-  const session = await auth();
-  const user = session?.user as { id?: string } | undefined;
-  if (!user?.id) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const { searchParams } = new URL(req.url);
   const fromRaw = searchParams.get("from");
   const toRaw = searchParams.get("to");
@@ -91,12 +86,12 @@ export async function GET(req: NextRequest) {
   const { data, error } = await sb
     .from("focus_sessions")
     .select(
-      "id, creator_user_id, starts_at, ends_at, duration_minutes, task, status, max_participants, hms_room_id",
+      "id, host_id, start_at, end_at, duration_minutes, task, status, max_participants, room_id",
     )
-    .gte("starts_at", from.toISOString())
-    .lte("starts_at", to.toISOString())
+    .gte("start_at", from.toISOString())
+    .lte("start_at", to.toISOString())
     .in("status", ["scheduled", "active", "cancelled"])
-    .order("starts_at", { ascending: true });
+    .order("start_at", { ascending: true });
 
   if (error) {
     console.error("[focus sessions] list failed", error);
@@ -133,7 +128,7 @@ export async function GET(req: NextRequest) {
   const hostIds = Array.from(
     new Set(
       sessions
-        .map((row) => row.creator_user_id)
+        .map((row) => row.host_id)
         .filter((id): id is string => Boolean(id)),
     ),
   );
@@ -163,9 +158,9 @@ export async function GET(req: NextRequest) {
   const now = new Date();
   const payload = sessions
     .map((row) => {
-      const startsAt = new Date(row.starts_at);
-      const endsAt = row.ends_at
-        ? new Date(row.ends_at)
+      const startsAt = new Date(row.start_at);
+      const endsAt = row.end_at
+        ? new Date(row.end_at)
         : computeEndsAt(
             startsAt,
             Number.isFinite(row.duration_minutes)
@@ -178,28 +173,28 @@ export async function GET(req: NextRequest) {
       if (endsAt.getTime() < now.getTime()) {
         return null;
       }
-      const hostProfile = hostMap.get(row.creator_user_id ?? "") ?? null;
+      const hostProfile = hostMap.get(row.host_id ?? "") ?? null;
       const hostDisplayName =
         hostProfile?.display_name ?? hostProfile?.name ?? "Focus Host";
       return {
         id: row.id,
         task: row.task ?? "desk",
-        starts_at: startsAt.toISOString(),
-        ends_at: endsAt.toISOString(),
+        start_at: startsAt.toISOString(),
+        end_at: endsAt.toISOString(),
         status: row.status ?? "scheduled",
-        host_id: row.creator_user_id,
+        host_id: row.host_id,
         host_display_name: hostDisplayName,
         participant_count: participantCounts.get(row.id) ?? 0,
         max_participants: row.max_participants ?? MAX_PARTICIPANTS,
-        room_id: row.hms_room_id ?? null,
+        room_id: row.room_id ?? null,
       };
     })
     .filter(
       (row): row is {
         id: string;
         task: string;
-        starts_at: string;
-        ends_at: string;
+        start_at: string;
+        end_at: string;
         status: string;
         host_id: string;
         host_display_name: string;
@@ -228,7 +223,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
-  const startsAt = parseStartsAt(payload.starts_at ?? payload.startsAt);
+  const startsAt = parseStartsAt(
+    payload.start_at ?? payload.starts_at ?? payload.startsAt,
+  );
   if (!startsAt) {
     return NextResponse.json(
       { error: "starts_at is required" },
@@ -267,9 +264,9 @@ export async function POST(req: NextRequest) {
   const { data: hostOverlap, error: hostOverlapError } = await sb
     .from("focus_sessions")
     .select("id")
-    .eq("creator_user_id", user.id)
-    .lt("starts_at", overlapFilter.end)
-    .gt("ends_at", overlapFilter.start)
+    .eq("host_id", user.id)
+    .lt("start_at", overlapFilter.end)
+    .gt("end_at", overlapFilter.start)
     .in("status", ["scheduled", "active"])
     .limit(1);
 
@@ -312,8 +309,8 @@ export async function POST(req: NextRequest) {
       .from("focus_sessions")
       .select("id")
       .in("id", participantSessionIds)
-      .lt("starts_at", overlapFilter.end)
-      .gt("ends_at", overlapFilter.start)
+      .lt("start_at", overlapFilter.end)
+      .gt("end_at", overlapFilter.start)
       .in("status", ["scheduled", "active"])
       .limit(1);
 
@@ -386,11 +383,11 @@ export async function POST(req: NextRequest) {
   const { data: inserted, error } = await sb
     .from("focus_sessions")
     .insert({
-      creator_user_id: user.id,
-      starts_at: startsAt.toISOString(),
-      ends_at: endsAt.toISOString(),
+      host_id: user.id,
+      start_at: startsAt.toISOString(),
+      end_at: endsAt.toISOString(),
       duration_minutes: durationMinutes,
-      hms_room_id: created.id,
+      room_id: created.id,
       task,
       title,
       status: "scheduled",
