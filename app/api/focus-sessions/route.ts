@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { rateLimit } from "@/lib/rateLimit";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import { buildHmsRoomName, createHmsManagementToken } from "@/lib/voice/hms";
 
@@ -20,6 +21,9 @@ const ALLOWED_DURATIONS = new Set([30, 60, 120]);
 const ALLOWED_TASKS = new Set(["desk", "moving", "anything"]);
 const MAX_PARTICIPANTS = 3;
 const DEFAULT_TITLE = "Focus Session";
+const DEFAULT_MAX_RANGE_DAYS = 14;
+const DEFAULT_RATE_LIMIT_MAX = 60;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 
 function parseStartsAt(value: unknown) {
   if (typeof value !== "string") return null;
@@ -55,6 +59,23 @@ function parseTitle(value: unknown) {
   return trimmed.length > 0 ? trimmed.slice(0, 140) : null;
 }
 
+function readPositiveInt(value: string | undefined, fallback: number) {
+  if (!value) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function getClientIp(req: NextRequest) {
+  const forwarded = req.headers.get("x-forwarded-for");
+  const realIp = req.headers.get("x-real-ip");
+  if (forwarded) {
+    const first = forwarded.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return realIp?.trim() || "anon";
+}
+
 function isStartAtLeastOneMinuteFromNow(startsAt: Date) {
   return startsAt.getTime() >= Date.now() + 60_000;
 }
@@ -64,6 +85,30 @@ function computeEndsAt(startsAt: Date, durationMinutes: number) {
 }
 
 export async function GET(req: NextRequest) {
+  const rateLimitMax = readPositiveInt(
+    process.env.FOCUS_SESSIONS_PUBLIC_RPM,
+    DEFAULT_RATE_LIMIT_MAX,
+  );
+  const rateLimitWindowMs = readPositiveInt(
+    process.env.FOCUS_SESSIONS_PUBLIC_WINDOW_MS,
+    DEFAULT_RATE_LIMIT_WINDOW_MS,
+  );
+  const throttle = rateLimit(
+    `focus-sessions:${getClientIp(req)}`,
+    rateLimitMax,
+    rateLimitWindowMs,
+  );
+  if (!throttle.ok) {
+    const retryAfter = Math.max(
+      1,
+      Math.ceil((throttle.resetAt - Date.now()) / 1000),
+    );
+    return NextResponse.json(
+      { error: "Too many requests. Try again soon." },
+      { status: 429, headers: { "Retry-After": String(retryAfter) } },
+    );
+  }
+
   const { searchParams } = new URL(req.url);
   const fromRaw = searchParams.get("from");
   const toRaw = searchParams.get("to");
@@ -78,6 +123,17 @@ export async function GET(req: NextRequest) {
   if (from.getTime() > to.getTime()) {
     return NextResponse.json(
       { error: "from must be before to" },
+      { status: 400 },
+    );
+  }
+  const maxRangeDays = readPositiveInt(
+    process.env.FOCUS_SESSIONS_MAX_RANGE_DAYS,
+    DEFAULT_MAX_RANGE_DAYS,
+  );
+  const maxRangeMs = maxRangeDays * 24 * 60 * 60 * 1000;
+  if (to.getTime() - from.getTime() > maxRangeMs) {
+    return NextResponse.json(
+      { error: `date range must be within ${maxRangeDays} days` },
       { status: 400 },
     );
   }
