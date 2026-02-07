@@ -392,11 +392,12 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // EFFECT: Skips middleware on static assets while covering root/signin for auth checks.
+  // EFFECT: Skips middleware on static assets and selected high-frequency APIs
+  // while covering root/signin and protected routes for auth checks.
   matcher: [
     "/",
     "/signin",
     "/timer/flip_countdown_new/index.html",
-    "/((?!$|_next|signin|.*\\.(?:ico|png|jpg|jpeg|gif|svg|webp|avif|css|js|woff2?|txt|json)$).+)",
+    "/((?!$|_next|signin|api/focus-sessions/?$|api/usage/heartbeat/?$|.*\\.(?:ico|png|jpg|jpeg|gif|svg|webp|avif|css|js|woff2?|txt|json)$).+)",
   ],
 };
