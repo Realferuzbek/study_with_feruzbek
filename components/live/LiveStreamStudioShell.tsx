@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import LiveStudioSessionSettings from "./LiveStudioSessionSettings";
 import LiveStudioCalendar3Day, {
+  type StudioSelectionRange,
   type StudioBooking,
 } from "./LiveStudioCalendar3Day";
 import LiveStudioRightPanel from "./LiveStudioRightPanel";
@@ -151,6 +152,8 @@ export default function LiveStreamStudioShell({
   });
   const [notice, setNotice] = useState<string | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
+  const [selectedBookingRange, setSelectedBookingRange] =
+    useState<StudioSelectionRange | null>(null);
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
   const [joiningSessionId, setJoiningSessionId] = useState<string | null>(null);
   const [pendingCancelSessionId, setPendingCancelSessionId] = useState<
@@ -189,6 +192,11 @@ export default function LiveStreamStudioShell({
     !sessionsEntry ||
     ((sessionsEntry?.sessions?.length ?? 0) === 0 &&
       (sessionsEntry?.isLoading ?? false));
+  const hasValidBookingSelection = Boolean(
+    selectedBookingRange &&
+      selectedBookingRange.end.getTime() > selectedBookingRange.start.getTime(),
+  );
+  const isBookCtaDisabled = !isPublic && !hasValidBookingSelection;
 
   useEffect(() => {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -560,6 +568,7 @@ export default function LiveStreamStudioShell({
         redirectToSignin("book");
         return;
       }
+      setSelectedBookingRange({ start: next.start, end: next.end });
       const rawDuration = Math.round(
         (next.end.getTime() - next.start.getTime()) / 60000,
       );
@@ -723,8 +732,13 @@ export default function LiveStreamStudioShell({
             task={task}
             onTaskChange={setTask}
             onBookSession={handleBookClick}
+            selectedRange={selectedBookingRange}
+            isBookDisabled={isBookCtaDisabled}
+            disabledReason={
+              isBookCtaDisabled ? "Select a time range on the calendar." : null
+            }
             primaryLabel={isPublic ? publicBookLabel : undefined}
-            helperText={isPublic ? publicBookHelperText : null}
+            helperText={isPublic ? publicBookHelperText : undefined}
           />
 
           <LiveStudioCalendar3Day
@@ -732,6 +746,7 @@ export default function LiveStreamStudioShell({
             selectedBookingId={selectedSessionId}
             onSelectBooking={setSelectedSessionId}
             onCreateBooking={handleCreateBooking}
+            onSelectionChange={setSelectedBookingRange}
             onRangeChange={handleVisibleRangeChange}
             notice={notice}
             error={sessionsError}
@@ -779,6 +794,8 @@ export default function LiveStreamStudioShell({
             collapsed={isRightPanelCollapsed}
             onCollapseChange={setIsRightPanelCollapsed}
             isLoading={isInitialLoadPending}
+            error={sessionsError}
+            onRetry={handleRetrySessions}
           />
         </div>
       </main>

@@ -26,9 +26,15 @@ export type StudioBooking = {
   isOptimistic?: boolean;
 };
 
+export type StudioSelectionRange = {
+  start: Date;
+  end: Date;
+};
+
 type LiveStudioCalendar3DayProps = {
   bookings: StudioBooking[];
   onCreateBooking?: (booking: StudioBooking) => void;
+  onSelectionChange?: (selection: StudioSelectionRange | null) => void;
   onSelectBooking?: (bookingId: string) => void;
   selectedBookingId?: string | null;
   onRangeChange?: (range: { from: Date; to: Date }) => void;
@@ -143,6 +149,7 @@ function clamp(value: number, min: number, max: number) {
 export default function LiveStudioCalendar3Day({
   bookings,
   onCreateBooking,
+  onSelectionChange,
   onSelectBooking,
   selectedBookingId,
   onRangeChange,
@@ -167,6 +174,7 @@ export default function LiveStudioCalendar3Day({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const columnRefs = useRef<Array<HTMLDivElement | null>>([]);
   const onRangeChangeRef = useRef(onRangeChange);
+  const onSelectionChangeRef = useRef(onSelectionChange);
   const lastRangeChangeRef = useRef<{ fromMs: number; toMs: number } | null>(
     null,
   );
@@ -200,6 +208,10 @@ export default function LiveStudioCalendar3Day({
   useEffect(() => {
     onRangeChangeRef.current = onRangeChange;
   }, [onRangeChange]);
+
+  useEffect(() => {
+    onSelectionChangeRef.current = onSelectionChange;
+  }, [onSelectionChange]);
 
   useEffect(() => {
     const nextTo = endOfDay(addDays(startDate, 2));
@@ -278,6 +290,16 @@ export default function LiveStudioCalendar3Day({
     return next;
   }, []);
 
+  const emitSelection = useCallback(
+    (day: Date, range: { startSlot: number; endSlot: number }) => {
+      onSelectionChangeRef.current?.({
+        start: slotToDate(day, range.startSlot),
+        end: slotToDate(day, range.endSlot + 1),
+      });
+    },
+    [slotToDate],
+  );
+
   const getSlotFromClientY = useCallback(
     (clientY: number, dayIndex: number) => {
       const column = columnRefs.current[dayIndex];
@@ -328,6 +350,7 @@ export default function LiveStudioCalendar3Day({
       const day = days[dragSnapshot.dayIndex];
       const start = slotToDate(day, range.startSlot);
       const end = slotToDate(day, range.endSlot + 1);
+      emitSelection(day, range);
       onCreateBooking?.({
         id: `booking-${start.getTime()}`,
         start,
@@ -347,6 +370,7 @@ export default function LiveStudioCalendar3Day({
   }, [
     days,
     dragging,
+    emitSelection,
     getSlotFromClientY,
     onCreateBooking,
     resolveRange,
@@ -354,6 +378,13 @@ export default function LiveStudioCalendar3Day({
     settings.task,
     slotToDate,
   ]);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const day = days[dragging.dayIndex];
+    if (!day) return;
+    emitSelection(day, resolveRange(dragging));
+  }, [days, dragging, emitSelection, resolveRange]);
 
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
   const nowTop = (nowMinutes / SLOT_MINUTES) * SLOT_HEIGHT;
@@ -632,7 +663,13 @@ export default function LiveStudioCalendar3Day({
                     )}
                     hostDisplayName={bookingItem.hostDisplayName ?? null}
                     isSelected={selectedBookingId === bookingItem.id}
-                    onSelect={() => onSelectBooking?.(bookingItem.id)}
+                    onSelect={() => {
+                      onSelectBooking?.(bookingItem.id);
+                      onSelectionChangeRef.current?.({
+                        start: bookingItem.start,
+                        end: bookingItem.end,
+                      });
+                    }}
                   />
                 ))}
 
