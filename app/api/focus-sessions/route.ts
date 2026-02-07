@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { createHash } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { rateLimit } from "@/lib/rateLimit";
@@ -24,6 +25,7 @@ const DEFAULT_TITLE = "Focus Session";
 const DEFAULT_MAX_RANGE_DAYS = 14;
 const DEFAULT_RATE_LIMIT_MAX = 60;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
+const FOCUS_SESSIONS_CACHE_CONTROL = "private, max-age=15, must-revalidate";
 
 function parseStartsAt(value: unknown) {
   if (typeof value !== "string") return null;
@@ -82,6 +84,20 @@ function isStartAtLeastOneMinuteFromNow(startsAt: Date) {
 
 function computeEndsAt(startsAt: Date, durationMinutes: number) {
   return new Date(startsAt.getTime() + durationMinutes * 60_000);
+}
+
+function buildFocusSessionsEtag(serializedPayload: string) {
+  const digest = createHash("sha1").update(serializedPayload).digest("base64url");
+  return `"${digest}"`;
+}
+
+function hasMatchingEtag(ifNoneMatchHeader: string | null, etag: string) {
+  if (!ifNoneMatchHeader) return false;
+  if (ifNoneMatchHeader.trim() === "*") return true;
+  return ifNoneMatchHeader
+    .split(",")
+    .map((value) => value.trim())
+    .some((value) => value === etag || value === `W/${etag}`);
 }
 
 export async function GET(req: NextRequest) {
@@ -260,8 +276,19 @@ export async function GET(req: NextRequest) {
       } => Boolean(row),
     );
 
-  const response = NextResponse.json({ sessions: payload });
-  response.headers.set("Cache-Control", "no-store");
+  const body = { sessions: payload };
+  const serializedBody = JSON.stringify(body);
+  const etag = buildFocusSessionsEtag(serializedBody);
+  if (hasMatchingEtag(req.headers.get("if-none-match"), etag)) {
+    const notModified = new NextResponse(null, { status: 304 });
+    notModified.headers.set("Cache-Control", FOCUS_SESSIONS_CACHE_CONTROL);
+    notModified.headers.set("ETag", etag);
+    return notModified;
+  }
+
+  const response = NextResponse.json(body);
+  response.headers.set("Cache-Control", FOCUS_SESSIONS_CACHE_CONTROL);
+  response.headers.set("ETag", etag);
   return response;
 }
 
