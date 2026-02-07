@@ -78,6 +78,13 @@ function buildRangeKey(range: DateRange) {
   return `${range.from.toISOString()}_${range.to.toISOString()}`;
 }
 
+function isSameRange(left: DateRange, right: DateRange) {
+  return (
+    left.from.getTime() === right.from.getTime() &&
+    left.to.getTime() === right.to.getTime()
+  );
+}
+
 function sortSessions(items: StudioBooking[]) {
   return [...items].sort((a, b) => a.start.getTime() - b.start.getTime());
 }
@@ -151,6 +158,9 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   const intent = searchParams.get("intent");
   const intentSessionId = searchParams.get("sessionId");
   const handledIntentRef = useRef<string | null>(null);
+  const visibleRangeRef = useRef<DateRange>(visibleRange);
+  const rangeRefreshDebounceRef = useRef<number | null>(null);
+  const hasLoadedInitialRangeRef = useRef(false);
 
   const publicJoinLabel = "Continue to join";
   const publicJoinHelperText = "You're one step away from joining.";
@@ -193,6 +203,10 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  useEffect(() => {
+    visibleRangeRef.current = visibleRange;
+  }, [visibleRange]);
+
   const redirectToSignin = useCallback(
     (nextIntent: "book" | "join" | "cancel", sessionId?: string | null) => {
       const params = new URLSearchParams({ intent: nextIntent });
@@ -207,7 +221,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
 
   const refreshSessions = useCallback(
     async (rangeOverride?: DateRange) => {
-      const rangeToUse = rangeOverride ?? visibleRange;
+      const rangeToUse = rangeOverride ?? visibleRangeRef.current;
       if (!rangeToUse?.from || !rangeToUse?.to) return;
       const rangeKey = buildRangeKey(rangeToUse);
       setSessionsCache((prev) => {
@@ -312,12 +326,33 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         });
       }
     },
-    [sessionsEndpoint, visibleRange],
+    [sessionsEndpoint],
   );
 
   useEffect(() => {
-    refreshSessions();
-  }, [refreshSessions]);
+    if (!hasLoadedInitialRangeRef.current) {
+      hasLoadedInitialRangeRef.current = true;
+      void refreshSessions();
+      return;
+    }
+
+    if (rangeRefreshDebounceRef.current !== null) {
+      window.clearTimeout(rangeRefreshDebounceRef.current);
+      rangeRefreshDebounceRef.current = null;
+    }
+
+    rangeRefreshDebounceRef.current = window.setTimeout(() => {
+      void refreshSessions();
+      rangeRefreshDebounceRef.current = null;
+    }, 220);
+
+    return () => {
+      if (rangeRefreshDebounceRef.current !== null) {
+        window.clearTimeout(rangeRefreshDebounceRef.current);
+        rangeRefreshDebounceRef.current = null;
+      }
+    };
+  }, [refreshSessions, visibleRangeKey]);
 
   useEffect(() => {
     if (!selectedSessionId) return;
@@ -345,6 +380,14 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
     setNotice("Drag on the calendar to book your session.");
     setFocusSignal((prev) => prev + 1);
   }, [redirectToSignin, user?.id]);
+
+  const handleVisibleRangeChange = useCallback((range: DateRange) => {
+    setVisibleRange((prev) => (isSameRange(prev, range) ? prev : range));
+  }, []);
+
+  const handleRetrySessions = useCallback(() => {
+    void refreshSessions();
+  }, [refreshSessions]);
 
   const handleJoinSession = useCallback(
     async (session: StudioBooking) => {
@@ -551,7 +594,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
           setSelectedSessionId(payloadId);
         }
         setNotice("Session booked.");
-        refreshSessions(visibleRange);
+        void refreshSessions();
       } catch (err) {
         console.error(err);
         setNotice("Unable to book session.");
@@ -562,7 +605,6 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
       redirectToSignin,
       refreshSessions,
       user?.id,
-      visibleRange,
     ],
   );
 
@@ -636,7 +678,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         if (selectedSessionId === sessionId) {
           setSelectedSessionId(sessionId);
         }
-        refreshSessions(visibleRange);
+        void refreshSessions();
       } catch (err) {
         console.error(err);
         setNotice("Unable to cancel session.");
@@ -651,7 +693,6 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
       refreshSessions,
       selectedSessionId,
       user?.id,
-      visibleRange,
     ],
   );
 
@@ -694,10 +735,10 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
               selectedBookingId={selectedSessionId}
               onSelectBooking={setSelectedSessionId}
               onCreateBooking={handleCreateBooking}
-              onRangeChange={(range) => setVisibleRange(range)}
+              onRangeChange={handleVisibleRangeChange}
               notice={notice}
               error={sessionsError}
-              onRetry={() => refreshSessions(visibleRange)}
+              onRetry={handleRetrySessions}
               isLoading={isRangeLoading}
               isReadOnly={isPublic}
               user={{

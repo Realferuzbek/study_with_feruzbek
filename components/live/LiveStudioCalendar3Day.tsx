@@ -164,6 +164,8 @@ export default function LiveStudioCalendar3Day({
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const columnRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const onRangeChangeRef = useRef(onRangeChange);
+  const lastRangeChangeRef = useRef<{ fromMs: number; toMs: number } | null>(null);
 
   const days = useMemo(
     () => [0, 1, 2].map((offset) => addDays(startDate, offset)),
@@ -192,11 +194,29 @@ export default function LiveStudioCalendar3Day({
   }, []);
 
   useEffect(() => {
-    onRangeChange?.({
+    onRangeChangeRef.current = onRangeChange;
+  }, [onRangeChange]);
+
+  useEffect(() => {
+    const nextTo = endOfDay(addDays(startDate, 2));
+    const nextRange = {
+      fromMs: startDate.getTime(),
+      toMs: nextTo.getTime(),
+    };
+    const previousRange = lastRangeChangeRef.current;
+    if (
+      previousRange &&
+      previousRange.fromMs === nextRange.fromMs &&
+      previousRange.toMs === nextRange.toMs
+    ) {
+      return;
+    }
+    lastRangeChangeRef.current = nextRange;
+    onRangeChangeRef.current?.({
       from: startDate,
-      to: endOfDay(addDays(startDate, 2)),
+      to: nextTo,
     });
-  }, [onRangeChange, startDate]);
+  }, [startDate]);
 
   useEffect(() => {
     const scrollEl = scrollRef.current;
