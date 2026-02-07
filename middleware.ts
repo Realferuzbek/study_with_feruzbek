@@ -398,6 +398,6 @@ export const config = {
     "/",
     "/signin",
     "/timer/flip_countdown_new/index.html",
-    "/((?!$|_next|signin|api/focus-sessions/?$|api/usage/heartbeat/?$|.*\\.(?:ico|png|jpg|jpeg|gif|svg|webp|avif|css|js|woff2?|txt|json)$).+)",
+    "/((?!$|_next/static|_next/image|_next|signin|favicon\\.ico$|robots\\.txt$|sitemap(?:[^/]+)?\\.xml$|opengraph-image|api/auth|api/live|api/public|api/reindex|api/leaderboard/health/?$|api/leaderboard/latest/?$|api/leaderboard/ingest|api/cron/leaderboard/?$|api/cron/nightly-reindex/?$|api/telegram/webhook/?$|api/100ms/webhook/?$|api/100ms/token/?$|api/admin/state/?$|api/focus-sessions/?$|api/usage/heartbeat/?$|api/chat/?$|api/chat/status/?$|api/chat/rating/?$|api/ai/health/?$|.*\\.(?:ico|png|jpg|jpeg|gif|svg|webp|avif|css|js|woff2?|txt|json)$).+)",
   ],
 };

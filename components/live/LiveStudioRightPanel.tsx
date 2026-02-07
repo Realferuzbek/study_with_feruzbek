@@ -273,8 +273,8 @@ export default function LiveStudioRightPanel({
 
   if (collapsed) {
     return (
-      <aside className="rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] p-4 transition-all duration-300">
-        <div className="flex flex-col items-center gap-4">
+      <aside className="rounded-[24px] border border-[var(--studio-border)] bg-[var(--studio-card)] p-3 shadow-[0_18px_45px_rgba(15,23,42,0.08)] transition-all duration-300">
+        <div className="flex flex-col items-center gap-3">
           <button
             type="button"
             onClick={() => onCollapseChange(false)}
@@ -288,7 +288,7 @@ export default function LiveStudioRightPanel({
             avatarUrl={user?.avatarUrl}
             name={user?.name}
             email={user?.email}
-            size={36}
+            size={40}
             alt="Profile avatar"
           />
 
@@ -309,7 +309,7 @@ export default function LiveStudioRightPanel({
   }
 
   return (
-    <aside className="min-h-[50vh] rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] p-4 transition-all duration-300">
+    <aside className="min-h-[50vh] rounded-[24px] border border-[var(--studio-border)] bg-[var(--studio-card)] p-4 shadow-[0_18px_45px_rgba(15,23,42,0.08)] transition-all duration-300">
       <div className="flex items-start justify-between gap-4 pb-4">
         <div className="flex items-start gap-3">
           <AvatarBadge

@@ -167,6 +167,9 @@ The required variables are listed in `.env.example`.
 - `LIVE_ROOMS_DEFAULT_MAX_SIZE` (default: `30`)
 - `LIVE_ROOMS_DEFAULT_VISIBILITY` (default: `public`)
 
+### Optional telemetry (default: off)
+- `ENABLE_TELEMETRY` (`1` enables Vercel Web Analytics + Speed Insights; unset/`0` keeps them disabled)
+
 ---
 
 ## Optional dev/testing flags (used in code, not listed in `.env.example`)

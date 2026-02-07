@@ -3,6 +3,7 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import LiveStudioSidebar from "./LiveStudioSidebar";
 import LiveStudioSessionSettings from "./LiveStudioSessionSettings";
 import LiveStudioCalendar3Day, {
   type StudioSelectionRange,
@@ -28,11 +29,16 @@ const THEME_STORAGE_KEY = "studymate-live-studio-theme";
 const DEFAULT_TITLE = "Focus Session";
 const ALLOWED_DURATIONS = new Set([30, 60, 120]);
 const EMPTY_SESSIONS: StudioBooking[] = [];
+const ACTIVE_POLL_INTERVAL_MS = 1_000;
+const IDLE_POLL_INTERVAL_MS = 5_000;
+const MAX_IDLE_POLL_INTERVAL_MS = 10_000;
 
 type DateRange = {
   from: Date;
   to: Date;
 };
+
+type RefreshSessionsResult = "updated" | "unchanged" | "error";
 
 type SessionCacheEntry = {
   sessions: StudioBooking[];
@@ -134,6 +140,37 @@ function canAutoJoin(session: StudioBooking) {
   return now >= joinOpenAt && now <= joinCloseAt;
 }
 
+function buildSessionSignature(session: StudioBooking) {
+  return [
+    session.id,
+    session.start.getTime(),
+    session.end.getTime(),
+    session.task,
+    session.status ?? "",
+    session.hostId ?? "",
+    session.hostDisplayName ?? "",
+    session.participantCount ?? 0,
+    session.maxParticipants ?? 0,
+    session.roomId ?? "",
+  ].join(":");
+}
+
+function buildSessionsSignature(sessions: StudioBooking[]) {
+  return sessions.map((session) => buildSessionSignature(session)).join("|");
+}
+
+function hasLiveActivityWindow(session: StudioBooking, nowMs: number) {
+  if (session.status === "cancelled" || session.status === "completed") {
+    return false;
+  }
+  const startMs = session.start.getTime();
+  const endMs = session.end.getTime();
+  return (
+    (session.status === "active" && nowMs <= endMs + 60_000) ||
+    (nowMs >= startMs - 10 * 60_000 && nowMs <= endMs + 60_000)
+  );
+}
+
 export default function LiveStreamStudioShell({
   user,
 }: LiveStreamStudioShellProps) {
@@ -169,13 +206,26 @@ export default function LiveStreamStudioShell({
   const visibleRangeRef = useRef<DateRange>(visibleRange);
   const rangeRefreshDebounceRef = useRef<number | null>(null);
   const hasLoadedInitialRangeRef = useRef(false);
+  const pollTimerRef = useRef<number | null>(null);
+  const etagByRangeRef = useRef<Record<string, string>>({});
+  const sessionsSignatureByRangeRef = useRef<Record<string, string>>({});
+  const unchangedPollCountRef = useRef(0);
+  const [isAuthenticated, setIsAuthenticated] = useState(!isPublic);
+  const [isPageVisible, setIsPageVisible] = useState(() =>
+    typeof document === "undefined"
+      ? true
+      : document.visibilityState === "visible",
+  );
+  const previousVisibilityRef = useRef(isPageVisible);
 
   const publicJoinLabel = "Continue to join";
   const publicJoinHelperText = "You're one step away from joining.";
   const publicBookLabel = "Continue to book";
   const publicBookHelperText = "You're one step away from booking.";
 
-  const sessionsEndpoint = "/api/focus-sessions";
+  const sessionsEndpoint = isPublic
+    ? "/api/public/sessions"
+    : "/api/focus-sessions";
   const visibleRangeKey = useMemo(
     () => buildRangeKey(visibleRange),
     [visibleRange],
@@ -197,6 +247,10 @@ export default function LiveStreamStudioShell({
       selectedBookingRange.end.getTime() > selectedBookingRange.start.getTime(),
   );
   const isBookCtaDisabled = !isPublic && !hasValidBookingSelection;
+  const hasRealtimeSessions = useMemo(() => {
+    const nowMs = Date.now();
+    return sessions.some((session) => hasLiveActivityWindow(session, nowMs));
+  }, [sessions]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -208,6 +262,21 @@ export default function LiveStreamStudioShell({
   useEffect(() => {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      setIsPageVisible(document.visibilityState === "visible");
+    };
+    onVisibilityChange();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    setIsAuthenticated(!isPublic);
+  }, [isPublic]);
 
   useEffect(() => {
     if (isPublic) return;
@@ -237,9 +306,9 @@ export default function LiveStreamStudioShell({
   );
 
   const refreshSessions = useCallback(
-    async (rangeOverride?: DateRange) => {
+    async (rangeOverride?: DateRange): Promise<RefreshSessionsResult> => {
       const rangeToUse = rangeOverride ?? visibleRangeRef.current;
-      if (!rangeToUse?.from || !rangeToUse?.to) return;
+      if (!rangeToUse?.from || !rangeToUse?.to) return "error";
       const rangeKey = buildRangeKey(rangeToUse);
       setSessionsCache((prev) => {
         const entry = prev[rangeKey] ?? {
@@ -261,10 +330,24 @@ export default function LiveStreamStudioShell({
         to: rangeToUse.to.toISOString(),
       });
       try {
+        const requestHeaders: HeadersInit = {};
+        if (!isPublic) {
+          const previousEtag = etagByRangeRef.current[rangeKey];
+          if (previousEtag) {
+            requestHeaders["If-None-Match"] = previousEtag;
+          }
+        }
         const res = await fetch(`${sessionsEndpoint}?${params.toString()}`, {
           cache: "no-store",
+          headers: requestHeaders,
         });
+        if (res.status === 304) {
+          return "unchanged";
+        }
         if (!res.ok) {
+          if (res.status === 401 && !isPublic) {
+            setIsAuthenticated(false);
+          }
           const text = await res.text().catch(() => "");
           const payload = text
             ? (() => {
@@ -288,7 +371,14 @@ export default function LiveStreamStudioShell({
               },
             };
           });
-          return;
+          return "error";
+        }
+        const nextEtag = res.headers.get("etag");
+        if (nextEtag) {
+          etagByRangeRef.current[rangeKey] = nextEtag;
+        }
+        if (!isPublic) {
+          setIsAuthenticated(true);
         }
         const payload = (await res.json()) as { sessions?: FocusSessionApi[] };
         const nextSessions =
@@ -296,6 +386,7 @@ export default function LiveStreamStudioShell({
             ?.map(toStudioBooking)
             .filter((session): session is StudioBooking => Boolean(session)) ??
           [];
+        let didChange = false;
         setSessionsCache((prev) => {
           const optimisticSessions =
             prev[rangeKey]?.sessions?.filter(
@@ -308,16 +399,23 @@ export default function LiveStreamStudioShell({
                 !nextSessions.some((session) => session.id === optimistic.id),
             ),
           ];
+          const sortedSessions = sortSessions(mergedSessions);
+          const previousSignature =
+            sessionsSignatureByRangeRef.current[rangeKey] ?? "";
+          const nextSignature = buildSessionsSignature(sortedSessions);
+          didChange = previousSignature !== nextSignature;
+          sessionsSignatureByRangeRef.current[rangeKey] = nextSignature;
           return {
             ...prev,
             [rangeKey]: {
-              sessions: sortSessions(mergedSessions),
+              sessions: sortedSessions,
               isLoading: false,
               updatedAt: Date.now(),
               error: null,
             },
           };
         });
+        return didChange ? "updated" : "unchanged";
       } catch (err) {
         console.error(err);
         setSessionsCache((prev) => {
@@ -331,6 +429,7 @@ export default function LiveStreamStudioShell({
             },
           };
         });
+        return "error";
       } finally {
         setSessionsCache((prev) => {
           const entry = prev[rangeKey];
@@ -345,12 +444,13 @@ export default function LiveStreamStudioShell({
         });
       }
     },
-    [sessionsEndpoint],
+    [isPublic, sessionsEndpoint],
   );
 
   useEffect(() => {
     if (!hasLoadedInitialRangeRef.current) {
       hasLoadedInitialRangeRef.current = true;
+      unchangedPollCountRef.current = 0;
       void refreshSessions();
       return;
     }
@@ -361,6 +461,7 @@ export default function LiveStreamStudioShell({
     }
 
     rangeRefreshDebounceRef.current = window.setTimeout(() => {
+      unchangedPollCountRef.current = 0;
       void refreshSessions();
       rangeRefreshDebounceRef.current = null;
     }, 220);
@@ -372,6 +473,74 @@ export default function LiveStreamStudioShell({
       }
     };
   }, [refreshSessions, visibleRangeKey]);
+
+  useEffect(() => {
+    if (isPublic || !isAuthenticated || !isPageVisible) {
+      if (pollTimerRef.current !== null) {
+        window.clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+      return;
+    }
+
+    let cancelled = false;
+
+    const resolveNextDelay = () => {
+      if (hasRealtimeSessions) return ACTIVE_POLL_INTERVAL_MS;
+      if (unchangedPollCountRef.current >= 3) return MAX_IDLE_POLL_INTERVAL_MS;
+      return IDLE_POLL_INTERVAL_MS;
+    };
+
+    const schedule = (delayMs: number) => {
+      if (pollTimerRef.current !== null) {
+        window.clearTimeout(pollTimerRef.current);
+      }
+      pollTimerRef.current = window.setTimeout(() => {
+        void runPoll();
+      }, delayMs);
+    };
+
+    const runPoll = async () => {
+      const result = await refreshSessions();
+      if (cancelled) return;
+      if (result === "updated") {
+        unchangedPollCountRef.current = 0;
+      } else {
+        unchangedPollCountRef.current = Math.min(
+          unchangedPollCountRef.current + 1,
+          8,
+        );
+      }
+      schedule(resolveNextDelay());
+    };
+
+    schedule(resolveNextDelay());
+
+    return () => {
+      cancelled = true;
+      if (pollTimerRef.current !== null) {
+        window.clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [
+    hasRealtimeSessions,
+    isAuthenticated,
+    isPageVisible,
+    isPublic,
+    refreshSessions,
+    visibleRangeKey,
+  ]);
+
+  useEffect(() => {
+    const wasVisible = previousVisibilityRef.current;
+    previousVisibilityRef.current = isPageVisible;
+    if (isPublic || !isAuthenticated || !isPageVisible) return;
+    if (wasVisible === isPageVisible) return;
+    if (!hasLoadedInitialRangeRef.current) return;
+    unchangedPollCountRef.current = 0;
+    void refreshSessions();
+  }, [isAuthenticated, isPageVisible, isPublic, refreshSessions]);
 
   useEffect(() => {
     if (!selectedSessionId) return;
@@ -407,6 +576,7 @@ export default function LiveStreamStudioShell({
   }, []);
 
   const handleRetrySessions = useCallback(() => {
+    unchangedPollCountRef.current = 0;
     void refreshSessions();
   }, [refreshSessions]);
 
@@ -617,6 +787,7 @@ export default function LiveStreamStudioShell({
           setSelectedSessionId(payloadId);
         }
         setNotice("Session booked.");
+        unchangedPollCountRef.current = 0;
         void refreshSessions();
       } catch (err) {
         console.error(err);
@@ -698,6 +869,7 @@ export default function LiveStreamStudioShell({
         if (selectedSessionId === sessionId) {
           setSelectedSessionId(sessionId);
         }
+        unchangedPollCountRef.current = 0;
         void refreshSessions();
       } catch (err) {
         console.error(err);
@@ -714,91 +886,103 @@ export default function LiveStreamStudioShell({
       className="min-h-[100dvh] bg-[var(--studio-bg)] text-[var(--studio-text)]"
       style={themeVars as CSSProperties}
     >
-      <main className="flex min-h-[100dvh] flex-col gap-6 p-6">
-        <header className="space-y-1">
-          <h1 className="text-[20px] font-semibold leading-7 text-[var(--studio-text)]">
-            Live Stream Studio
-          </h1>
-          <p className="text-sm text-[var(--studio-muted)]">
-            Book focused sessions, scan availability, and manage details in one
-            place.
-          </p>
-        </header>
+      <div className="flex min-h-[100dvh] flex-col md:flex-row">
+        <LiveStudioSidebar
+          user={{
+            name: user?.displayName ?? user?.name ?? null,
+            email: user?.email ?? null,
+            avatarUrl: user?.avatarUrl ?? null,
+          }}
+        />
 
-        <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)_360px]">
-          <LiveStudioSessionSettings
-            durationMinutes={durationMinutes}
-            onDurationChange={setDurationMinutes}
-            task={task}
-            onTaskChange={setTask}
-            onBookSession={handleBookClick}
-            selectedRange={selectedBookingRange}
-            isBookDisabled={isBookCtaDisabled}
-            disabledReason={
-              isBookCtaDisabled ? "Select a time range on the calendar." : null
+        <main className="flex-1 px-4 py-6 md:px-6 md:py-8">
+          <div
+            className="grid gap-4 transition-[grid-template-columns] duration-300 lg:grid-cols-[320px_minmax(0,1fr)_var(--live-right-width)] xl:grid-cols-[320px_minmax(0,1fr)_var(--live-right-width-xl)]"
+            style={
+              {
+                "--live-right-width": isRightPanelCollapsed ? "88px" : "360px",
+                "--live-right-width-xl": isRightPanelCollapsed
+                  ? "88px"
+                  : "360px",
+              } as CSSProperties
             }
-            primaryLabel={isPublic ? publicBookLabel : undefined}
-            helperText={isPublic ? publicBookHelperText : undefined}
-          />
+          >
+            <LiveStudioSessionSettings
+              durationMinutes={durationMinutes}
+              onDurationChange={setDurationMinutes}
+              task={task}
+              onTaskChange={setTask}
+              onBookSession={handleBookClick}
+              selectedRange={selectedBookingRange}
+              isBookDisabled={isBookCtaDisabled}
+              disabledReason={
+                isBookCtaDisabled
+                  ? "Select a time range on the calendar."
+                  : null
+              }
+              primaryLabel={isPublic ? publicBookLabel : undefined}
+              helperText={isPublic ? publicBookHelperText : undefined}
+            />
 
-          <LiveStudioCalendar3Day
-            bookings={sessions}
-            selectedBookingId={selectedSessionId}
-            onSelectBooking={setSelectedSessionId}
-            onCreateBooking={handleCreateBooking}
-            onSelectionChange={setSelectedBookingRange}
-            onRangeChange={handleVisibleRangeChange}
-            notice={notice}
-            error={sessionsError}
-            onRetry={handleRetrySessions}
-            isLoading={isRangeLoading}
-            showSkeleton={isInitialLoadPending}
-            isReadOnly={isPublic}
-            user={{
-              id: user?.id ?? null,
-              name: user?.displayName ?? user?.name ?? null,
-              email: user?.email ?? null,
-              avatarUrl: user?.avatarUrl ?? null,
-            }}
-            settings={{ durationMinutes, task }}
-            focusSignal={focusSignal}
-          />
+            <LiveStudioCalendar3Day
+              bookings={sessions}
+              selectedBookingId={selectedSessionId}
+              onSelectBooking={setSelectedSessionId}
+              onCreateBooking={handleCreateBooking}
+              onSelectionChange={setSelectedBookingRange}
+              onRangeChange={handleVisibleRangeChange}
+              notice={notice}
+              error={sessionsError}
+              onRetry={handleRetrySessions}
+              isLoading={isRangeLoading}
+              showSkeleton={isInitialLoadPending}
+              isReadOnly={isPublic}
+              user={{
+                id: user?.id ?? null,
+                name: user?.displayName ?? user?.name ?? null,
+                email: user?.email ?? null,
+                avatarUrl: user?.avatarUrl ?? null,
+              }}
+              settings={{ durationMinutes, task }}
+              focusSignal={focusSignal}
+            />
 
-          <LiveStudioRightPanel
-            user={{
-              name: user?.name ?? null,
-              displayName: user?.displayName ?? null,
-              email: user?.email ?? null,
-              avatarUrl: user?.avatarUrl ?? null,
-            }}
-            theme={theme}
-            onToggleTheme={() =>
-              setTheme((prev) => (prev === "light" ? "dark" : "light"))
-            }
-            selectedSession={selectedSession}
-            upcomingSession={upcomingSessionForPanel}
-            upcomingSessions={isPublic ? publicUpcomingSessions : []}
-            isPublic={isPublic}
-            publicCtaLabel={publicJoinLabel}
-            publicHelperText={publicJoinHelperText}
-            onPublicAction={(nextIntent, sessionId) =>
-              redirectToSignin(nextIntent, sessionId)
-            }
-            pendingCancelSessionId={pendingCancelSessionId}
-            onConfirmCancel={(sessionId) => handleCancelSession(sessionId)}
-            onDismissCancel={() => setPendingCancelSessionId(null)}
-            onCancelSession={handleCancelSession}
-            onJoinSession={handleJoinSession}
-            joiningSessionId={joiningSessionId}
-            userId={user?.id ?? null}
-            collapsed={isRightPanelCollapsed}
-            onCollapseChange={setIsRightPanelCollapsed}
-            isLoading={isInitialLoadPending}
-            error={sessionsError}
-            onRetry={handleRetrySessions}
-          />
-        </div>
-      </main>
+            <LiveStudioRightPanel
+              user={{
+                name: user?.name ?? null,
+                displayName: user?.displayName ?? null,
+                email: user?.email ?? null,
+                avatarUrl: user?.avatarUrl ?? null,
+              }}
+              theme={theme}
+              onToggleTheme={() =>
+                setTheme((prev) => (prev === "light" ? "dark" : "light"))
+              }
+              selectedSession={selectedSession}
+              upcomingSession={upcomingSessionForPanel}
+              upcomingSessions={isPublic ? publicUpcomingSessions : []}
+              isPublic={isPublic}
+              publicCtaLabel={publicJoinLabel}
+              publicHelperText={publicJoinHelperText}
+              onPublicAction={(nextIntent, sessionId) =>
+                redirectToSignin(nextIntent, sessionId)
+              }
+              pendingCancelSessionId={pendingCancelSessionId}
+              onConfirmCancel={(sessionId) => handleCancelSession(sessionId)}
+              onDismissCancel={() => setPendingCancelSessionId(null)}
+              onCancelSession={handleCancelSession}
+              onJoinSession={handleJoinSession}
+              joiningSessionId={joiningSessionId}
+              userId={user?.id ?? null}
+              collapsed={isRightPanelCollapsed}
+              onCollapseChange={setIsRightPanelCollapsed}
+              isLoading={isInitialLoadPending}
+              error={sessionsError}
+              onRetry={handleRetrySessions}
+            />
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

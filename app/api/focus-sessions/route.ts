@@ -18,14 +18,58 @@ type CreateFocusSessionPayload = {
   title?: string;
 };
 
+type FocusSessionListItem = {
+  id: string;
+  task: string;
+  start_at: string;
+  end_at: string;
+  status: string;
+  host_id: string | null;
+  host_display_name: string;
+  participant_count: number;
+  max_participants: number;
+  room_id: string | null;
+};
+
+type FocusSessionsResponseBody = {
+  sessions: FocusSessionListItem[];
+};
+
+type FocusSessionsCacheEntry = {
+  body: FocusSessionsResponseBody;
+  etag: string;
+  expiresAt: number;
+};
+
 const ALLOWED_DURATIONS = new Set([30, 60, 120]);
 const ALLOWED_TASKS = new Set(["desk", "moving", "anything"]);
 const MAX_PARTICIPANTS = 3;
 const DEFAULT_TITLE = "Focus Session";
 const DEFAULT_MAX_RANGE_DAYS = 14;
-const DEFAULT_RATE_LIMIT_MAX = 60;
-const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
+const DEFAULT_AUTH_SESSION_RATE_LIMIT_MAX = 180;
+const DEFAULT_AUTH_IP_RATE_LIMIT_MAX = 360;
+const DEFAULT_AUTH_RATE_LIMIT_WINDOW_MS = 60_000;
+const DEFAULT_RESPONSE_CACHE_TTL_MS = 2_000;
+const MAX_RESPONSE_CACHE_ENTRIES = 64;
 const FOCUS_SESSIONS_CACHE_CONTROL = "private, max-age=15, must-revalidate";
+const NEXTAUTH_COOKIE_NAME =
+  process.env.NEXTAUTH_COOKIE_NAME || "next-auth.session-token";
+const NEXTAUTH_SESSION_COOKIE_CANDIDATES = Array.from(
+  new Set(
+    [
+      NEXTAUTH_COOKIE_NAME,
+      NEXTAUTH_COOKIE_NAME.startsWith("__Secure-")
+        ? NEXTAUTH_COOKIE_NAME.slice("__Secure-".length)
+        : NEXTAUTH_COOKIE_NAME,
+      NEXTAUTH_COOKIE_NAME.startsWith("__Secure-")
+        ? NEXTAUTH_COOKIE_NAME
+        : `__Secure-${NEXTAUTH_COOKIE_NAME}`,
+      "next-auth.session-token",
+      "__Secure-next-auth.session-token",
+    ].filter((value) => value.length > 0),
+  ),
+);
+const focusSessionsResponseCache = new Map<string, FocusSessionsCacheEntry>();
 
 function parseStartsAt(value: unknown) {
   if (typeof value !== "string") return null;
@@ -100,28 +144,108 @@ function hasMatchingEtag(ifNoneMatchHeader: string | null, etag: string) {
     .some((value) => value === etag || value === `W/${etag}`);
 }
 
+function hasSessionCookie(req: NextRequest) {
+  for (const cookieName of NEXTAUTH_SESSION_COOKIE_CANDIDATES) {
+    const value = req.cookies.get(cookieName)?.value;
+    if (value) return true;
+  }
+  return false;
+}
+
+function buildTooManyRequestsResponse(resetAt: number) {
+  const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
+  return NextResponse.json(
+    { error: "Too many requests. Try again soon." },
+    { status: 429, headers: { "Retry-After": String(retryAfter) } },
+  );
+}
+
+function buildResponseCacheKey(from: Date, to: Date) {
+  return `${from.toISOString()}|${to.toISOString()}`;
+}
+
+function readFocusSessionsCache(key: string, now: number) {
+  const entry = focusSessionsResponseCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= now) {
+    focusSessionsResponseCache.delete(key);
+    return null;
+  }
+  return entry;
+}
+
+function writeFocusSessionsCache(key: string, entry: FocusSessionsCacheEntry) {
+  const now = Date.now();
+  for (const [cachedKey, cachedValue] of focusSessionsResponseCache.entries()) {
+    if (cachedValue.expiresAt <= now) {
+      focusSessionsResponseCache.delete(cachedKey);
+    }
+  }
+  if (focusSessionsResponseCache.has(key)) {
+    focusSessionsResponseCache.delete(key);
+  }
+  focusSessionsResponseCache.set(key, entry);
+  while (focusSessionsResponseCache.size > MAX_RESPONSE_CACHE_ENTRIES) {
+    const oldestKey = focusSessionsResponseCache.keys().next().value;
+    if (!oldestKey) break;
+    focusSessionsResponseCache.delete(oldestKey);
+  }
+}
+
+function buildFocusSessionsGetResponse(
+  body: FocusSessionsResponseBody,
+  etag: string,
+  ifNoneMatch: string | null,
+) {
+  if (hasMatchingEtag(ifNoneMatch, etag)) {
+    const notModified = new NextResponse(null, { status: 304 });
+    notModified.headers.set("Cache-Control", FOCUS_SESSIONS_CACHE_CONTROL);
+    notModified.headers.set("ETag", etag);
+    return notModified;
+  }
+  const response = NextResponse.json(body);
+  response.headers.set("Cache-Control", FOCUS_SESSIONS_CACHE_CONTROL);
+  response.headers.set("ETag", etag);
+  return response;
+}
+
 export async function GET(req: NextRequest) {
-  const rateLimitMax = readPositiveInt(
-    process.env.FOCUS_SESSIONS_PUBLIC_RPM,
-    DEFAULT_RATE_LIMIT_MAX,
+  if (!hasSessionCookie(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const session = await auth();
+  const user = session?.user as { id?: string } | undefined;
+  if (!user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const authSessionRateLimitMax = readPositiveInt(
+    process.env.FOCUS_SESSIONS_AUTH_RPM,
+    DEFAULT_AUTH_SESSION_RATE_LIMIT_MAX,
+  );
+  const authIpRateLimitMax = readPositiveInt(
+    process.env.FOCUS_SESSIONS_AUTH_IP_RPM,
+    DEFAULT_AUTH_IP_RATE_LIMIT_MAX,
   );
   const rateLimitWindowMs = readPositiveInt(
-    process.env.FOCUS_SESSIONS_PUBLIC_WINDOW_MS,
-    DEFAULT_RATE_LIMIT_WINDOW_MS,
+    process.env.FOCUS_SESSIONS_AUTH_WINDOW_MS,
+    DEFAULT_AUTH_RATE_LIMIT_WINDOW_MS,
   );
-  const throttle = rateLimit(
-    `focus-sessions:${getClientIp(req)}`,
-    rateLimitMax,
+  const clientIp = getClientIp(req);
+  const sessionThrottle = rateLimit(
+    `focus-sessions:user:${user.id}`,
+    authSessionRateLimitMax,
     rateLimitWindowMs,
   );
-  if (!throttle.ok) {
-    const retryAfter = Math.max(
-      1,
-      Math.ceil((throttle.resetAt - Date.now()) / 1000),
-    );
-    return NextResponse.json(
-      { error: "Too many requests. Try again soon." },
-      { status: 429, headers: { "Retry-After": String(retryAfter) } },
+  const ipThrottle = rateLimit(
+    `focus-sessions:ip:${clientIp}`,
+    authIpRateLimitMax,
+    rateLimitWindowMs,
+  );
+  if (!sessionThrottle.ok || !ipThrottle.ok) {
+    return buildTooManyRequestsResponse(
+      Math.max(sessionThrottle.resetAt, ipThrottle.resetAt),
     );
   }
 
@@ -151,6 +275,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       { error: `date range must be within ${maxRangeDays} days` },
       { status: 400 },
+    );
+  }
+
+  const responseCacheKey = buildResponseCacheKey(from, to);
+  const cachedResponse = readFocusSessionsCache(responseCacheKey, Date.now());
+  if (cachedResponse) {
+    return buildFocusSessionsGetResponse(
+      cachedResponse.body,
+      cachedResponse.etag,
+      req.headers.get("if-none-match"),
     );
   }
 
@@ -261,35 +395,22 @@ export async function GET(req: NextRequest) {
         room_id: row.room_id ?? null,
       };
     })
-    .filter(
-      (row): row is {
-        id: string;
-        task: string;
-        start_at: string;
-        end_at: string;
-        status: string;
-        host_id: string;
-        host_display_name: string;
-        participant_count: number;
-        max_participants: number;
-        room_id: string | null;
-      } => Boolean(row),
-    );
+    .filter((row): row is FocusSessionListItem => Boolean(row));
 
-  const body = { sessions: payload };
+  const body: FocusSessionsResponseBody = { sessions: payload };
   const serializedBody = JSON.stringify(body);
   const etag = buildFocusSessionsEtag(serializedBody);
-  if (hasMatchingEtag(req.headers.get("if-none-match"), etag)) {
-    const notModified = new NextResponse(null, { status: 304 });
-    notModified.headers.set("Cache-Control", FOCUS_SESSIONS_CACHE_CONTROL);
-    notModified.headers.set("ETag", etag);
-    return notModified;
-  }
+  const cacheTtlMs = readPositiveInt(
+    process.env.FOCUS_SESSIONS_MEM_CACHE_TTL_MS,
+    DEFAULT_RESPONSE_CACHE_TTL_MS,
+  );
+  writeFocusSessionsCache(responseCacheKey, {
+    body,
+    etag,
+    expiresAt: Date.now() + cacheTtlMs,
+  });
 
-  const response = NextResponse.json(body);
-  response.headers.set("Cache-Control", FOCUS_SESSIONS_CACHE_CONTROL);
-  response.headers.set("ETag", etag);
-  return response;
+  return buildFocusSessionsGetResponse(body, etag, req.headers.get("if-none-match"));
 }
 
 export async function POST(req: NextRequest) {

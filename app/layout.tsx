@@ -12,6 +12,7 @@ import Providers from "./providers";
 
 const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL || "https://thestudymate.vercel.app";
+const ENABLE_TELEMETRY = (process.env.ENABLE_TELEMETRY ?? "0").trim() === "1";
 const SITE_TITLE = "StudyMate";
 const SITE_DESCRIPTION =
   "Study tracker, timers, streaks & productivity tools by StudyMate.";
@@ -107,8 +108,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <NextTopLoader showSpinner={false} />
           <ServiceWorkerRegister />
           {children}
-          <Analytics />
-          <SpeedInsights />
+          {ENABLE_TELEMETRY ? (
+            <>
+              <Analytics />
+              <SpeedInsights />
+            </>
+          ) : null}
           <DeferredChatWidget />
         </Providers>
       </body>
