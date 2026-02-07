@@ -3,9 +3,10 @@
 import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import LiveStudioSidebar from "./LiveStudioSidebar";
 import LiveStudioSessionSettings from "./LiveStudioSessionSettings";
-import LiveStudioCalendar3Day, { type StudioBooking } from "./LiveStudioCalendar3Day";
+import LiveStudioCalendar3Day, {
+  type StudioBooking,
+} from "./LiveStudioCalendar3Day";
 import LiveStudioRightPanel from "./LiveStudioRightPanel";
 import type { StudioTask } from "./liveStudioOptions";
 import { csrfFetch } from "@/lib/csrf-client";
@@ -132,14 +133,18 @@ function canAutoJoin(session: StudioBooking) {
   return now >= joinOpenAt && now <= joinCloseAt;
 }
 
-export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellProps) {
+export default function LiveStreamStudioShell({
+  user,
+}: LiveStreamStudioShellProps) {
   const [theme, setTheme] = useState<ThemeMode>("light");
   const [durationMinutes, setDurationMinutes] = useState(30);
   const [task, setTask] = useState<StudioTask>("desk");
   const [sessionsCache, setSessionsCache] = useState<
     Record<string, SessionCacheEntry>
   >({});
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    null,
+  );
   const [visibleRange, setVisibleRange] = useState<DateRange>(() => {
     const today = startOfDay(new Date());
     return { from: today, to: endOfDay(addDays(today, 2)) };
@@ -148,9 +153,9 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   const [focusSignal, setFocusSignal] = useState(0);
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
   const [joiningSessionId, setJoiningSessionId] = useState<string | null>(null);
-  const [pendingCancelSessionId, setPendingCancelSessionId] = useState<string | null>(
-    null,
-  );
+  const [pendingCancelSessionId, setPendingCancelSessionId] = useState<
+    string | null
+  >(null);
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -180,6 +185,10 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   );
   const isRangeLoading = sessionsEntry?.isLoading ?? false;
   const sessionsError = sessionsEntry?.error ?? null;
+  const isInitialLoadPending =
+    !sessionsEntry ||
+    ((sessionsEntry?.sessions?.length ?? 0) === 0 &&
+      (sessionsEntry?.isLoading ?? false));
 
   useEffect(() => {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -249,13 +258,15 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         });
         if (!res.ok) {
           const text = await res.text().catch(() => "");
-          const payload = text ? (() => {
-            try {
-              return JSON.parse(text);
-            } catch {
-              return null;
-            }
-          })() : null;
+          const payload = text
+            ? (() => {
+                try {
+                  return JSON.parse(text);
+                } catch {
+                  return null;
+                }
+              })()
+            : null;
           const message = payload?.error ?? "Failed to load sessions.";
           console.error("[focus sessions] list failed", res.status, text);
           setSessionsCache((prev) => {
@@ -356,7 +367,9 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
 
   useEffect(() => {
     if (!selectedSessionId) return;
-    const stillExists = sessions.some((session) => session.id === selectedSessionId);
+    const stillExists = sessions.some(
+      (session) => session.id === selectedSessionId,
+    );
     if (!stillExists) {
       setSelectedSessionId(null);
     }
@@ -399,14 +412,11 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
       if (joiningSessionId && joiningSessionId !== session.id) return;
       setJoiningSessionId(session.id);
       try {
-        const res = await csrfFetch(
-          `/api/focus-sessions/${session.id}/token`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),
-          },
-        );
+        const res = await csrfFetch(`/api/focus-sessions/${session.id}/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
         const text = await res.text().catch(() => "");
         if (!res.ok) {
           const payload = text
@@ -434,7 +444,11 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
           : null;
         const token = payload?.token;
         if (!token) {
-          console.error("[focus sessions] join token missing", res.status, text);
+          console.error(
+            "[focus sessions] join token missing",
+            res.status,
+            text,
+          );
           setNotice("Unable to join session.");
           return;
         }
@@ -600,12 +614,7 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         setNotice("Unable to book session.");
       }
     },
-    [
-      durationMinutes,
-      redirectToSignin,
-      refreshSessions,
-      user?.id,
-    ],
+    [durationMinutes, redirectToSignin, refreshSessions, user?.id],
   );
 
   const selectedSession = useMemo(
@@ -643,7 +652,9 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
   }, [isPublic, sessions]);
 
   const publicFeaturedSession = publicUpcomingSessions[0] ?? null;
-  const upcomingSessionForPanel = isPublic ? publicFeaturedSession : nextUserSession;
+  const upcomingSessionForPanel = isPublic
+    ? publicFeaturedSession
+    : nextUserSession;
 
   const handleCancelSession = useCallback(
     async (sessionId: string) => {
@@ -683,17 +694,10 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
         console.error(err);
         setNotice("Unable to cancel session.");
       } finally {
-        setPendingCancelSessionId((prev) =>
-          prev === sessionId ? null : prev,
-        );
+        setPendingCancelSessionId((prev) => (prev === sessionId ? null : prev));
       }
     },
-    [
-      redirectToSignin,
-      refreshSessions,
-      selectedSessionId,
-      user?.id,
-    ],
+    [redirectToSignin, refreshSessions, selectedSessionId, user?.id],
   );
 
   return (
@@ -701,89 +705,83 @@ export default function LiveStreamStudioShell({ user }: LiveStreamStudioShellPro
       className="min-h-[100dvh] bg-[var(--studio-bg)] text-[var(--studio-text)]"
       style={themeVars as CSSProperties}
     >
-      <div className="flex min-h-[100dvh] flex-col md:flex-row">
-        <LiveStudioSidebar
-          user={{
-            name: user?.displayName ?? user?.name ?? null,
-            email: user?.email ?? null,
-            avatarUrl: user?.avatarUrl ?? null,
-          }}
-        />
+      <main className="flex min-h-[100dvh] flex-col gap-6 p-6">
+        <header className="space-y-1">
+          <h1 className="text-[20px] font-semibold leading-7 text-[var(--studio-text)]">
+            Live Stream Studio
+          </h1>
+          <p className="text-sm text-[var(--studio-muted)]">
+            Book focused sessions, scan availability, and manage details in one
+            place.
+          </p>
+        </header>
 
-        <main className="flex-1 px-4 py-6 md:px-6 md:py-8">
-          <div
-            className="grid gap-5 transition-[grid-template-columns] duration-300 lg:grid-cols-[280px_minmax(0,1fr)_var(--live-right-width)] xl:grid-cols-[300px_minmax(0,1fr)_var(--live-right-width-xl)]"
-            style={
-              {
-                "--live-right-width": isRightPanelCollapsed ? "64px" : "280px",
-                "--live-right-width-xl": isRightPanelCollapsed ? "64px" : "300px",
-              } as CSSProperties
+        <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)_360px]">
+          <LiveStudioSessionSettings
+            durationMinutes={durationMinutes}
+            onDurationChange={setDurationMinutes}
+            task={task}
+            onTaskChange={setTask}
+            onBookSession={handleBookClick}
+            primaryLabel={isPublic ? publicBookLabel : undefined}
+            helperText={isPublic ? publicBookHelperText : null}
+          />
+
+          <LiveStudioCalendar3Day
+            bookings={sessions}
+            selectedBookingId={selectedSessionId}
+            onSelectBooking={setSelectedSessionId}
+            onCreateBooking={handleCreateBooking}
+            onRangeChange={handleVisibleRangeChange}
+            notice={notice}
+            error={sessionsError}
+            onRetry={handleRetrySessions}
+            isLoading={isRangeLoading}
+            showSkeleton={isInitialLoadPending}
+            isReadOnly={isPublic}
+            user={{
+              id: user?.id ?? null,
+              name: user?.displayName ?? user?.name ?? null,
+              email: user?.email ?? null,
+              avatarUrl: user?.avatarUrl ?? null,
+            }}
+            settings={{ durationMinutes, task }}
+            focusSignal={focusSignal}
+          />
+
+          <LiveStudioRightPanel
+            user={{
+              name: user?.name ?? null,
+              displayName: user?.displayName ?? null,
+              email: user?.email ?? null,
+              avatarUrl: user?.avatarUrl ?? null,
+            }}
+            theme={theme}
+            onToggleTheme={() =>
+              setTheme((prev) => (prev === "light" ? "dark" : "light"))
             }
-          >
-            <LiveStudioSessionSettings
-              durationMinutes={durationMinutes}
-              onDurationChange={setDurationMinutes}
-              task={task}
-              onTaskChange={setTask}
-              onBookSession={handleBookClick}
-              primaryLabel={isPublic ? publicBookLabel : undefined}
-              helperText={isPublic ? publicBookHelperText : null}
-            />
-
-            <LiveStudioCalendar3Day
-              bookings={sessions}
-              selectedBookingId={selectedSessionId}
-              onSelectBooking={setSelectedSessionId}
-              onCreateBooking={handleCreateBooking}
-              onRangeChange={handleVisibleRangeChange}
-              notice={notice}
-              error={sessionsError}
-              onRetry={handleRetrySessions}
-              isLoading={isRangeLoading}
-              isReadOnly={isPublic}
-              user={{
-                id: user?.id ?? null,
-                name: user?.displayName ?? user?.name ?? null,
-                email: user?.email ?? null,
-                avatarUrl: user?.avatarUrl ?? null,
-              }}
-              settings={{ durationMinutes, task }}
-              focusSignal={focusSignal}
-            />
-
-            <LiveStudioRightPanel
-              user={{
-                name: user?.name ?? null,
-                displayName: user?.displayName ?? null,
-                email: user?.email ?? null,
-                avatarUrl: user?.avatarUrl ?? null,
-              }}
-              theme={theme}
-              onToggleTheme={() =>
-                setTheme((prev) => (prev === "light" ? "dark" : "light"))
-              }
-              selectedSession={selectedSession}
-              upcomingSession={upcomingSessionForPanel}
-              upcomingSessions={isPublic ? publicUpcomingSessions : []}
-              isPublic={isPublic}
-              publicCtaLabel={publicJoinLabel}
-              publicHelperText={publicJoinHelperText}
-              onPublicAction={(nextIntent, sessionId) =>
-                redirectToSignin(nextIntent, sessionId)
-              }
-              pendingCancelSessionId={pendingCancelSessionId}
-              onConfirmCancel={(sessionId) => handleCancelSession(sessionId)}
-              onDismissCancel={() => setPendingCancelSessionId(null)}
-              onCancelSession={handleCancelSession}
-              onJoinSession={handleJoinSession}
-              joiningSessionId={joiningSessionId}
-              userId={user?.id ?? null}
-              collapsed={isRightPanelCollapsed}
-              onCollapseChange={setIsRightPanelCollapsed}
-            />
-          </div>
-        </main>
-      </div>
+            selectedSession={selectedSession}
+            upcomingSession={upcomingSessionForPanel}
+            upcomingSessions={isPublic ? publicUpcomingSessions : []}
+            isPublic={isPublic}
+            publicCtaLabel={publicJoinLabel}
+            publicHelperText={publicJoinHelperText}
+            onPublicAction={(nextIntent, sessionId) =>
+              redirectToSignin(nextIntent, sessionId)
+            }
+            pendingCancelSessionId={pendingCancelSessionId}
+            onConfirmCancel={(sessionId) => handleCancelSession(sessionId)}
+            onDismissCancel={() => setPendingCancelSessionId(null)}
+            onCancelSession={handleCancelSession}
+            onJoinSession={handleJoinSession}
+            joiningSessionId={joiningSessionId}
+            userId={user?.id ?? null}
+            collapsed={isRightPanelCollapsed}
+            onCollapseChange={setIsRightPanelCollapsed}
+            isLoading={isInitialLoadPending}
+          />
+        </div>
+      </main>
     </div>
   );
 }

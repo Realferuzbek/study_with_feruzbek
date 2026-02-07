@@ -1,7 +1,13 @@
 "use client";
 
 import AvatarBadge from "@/components/AvatarBadge";
-import { CalendarDays, ChevronRight, ChevronsRight, Moon, Sun } from "lucide-react";
+import {
+  CalendarDays,
+  ChevronRight,
+  ChevronsRight,
+  Moon,
+  Sun,
+} from "lucide-react";
 import { useMemo, useState, useEffect } from "react";
 import type { StudioBooking } from "./LiveStudioCalendar3Day";
 import { TASK_OPTIONS } from "./liveStudioOptions";
@@ -31,6 +37,7 @@ type LiveStudioRightPanelProps = {
   joiningSessionId?: string | null;
   collapsed: boolean;
   onCollapseChange: (next: boolean) => void;
+  isLoading?: boolean;
 };
 
 function formatTimeCompact(date: Date) {
@@ -69,6 +76,7 @@ export default function LiveStudioRightPanel({
   joiningSessionId,
   collapsed,
   onCollapseChange,
+  isLoading = false,
 }: LiveStudioRightPanelProps) {
   const [showSchedule, setShowSchedule] = useState(false);
   const [now, setNow] = useState(() => new Date());
@@ -78,8 +86,7 @@ export default function LiveStudioRightPanel({
     return () => window.clearInterval(timer);
   }, []);
 
-  const greetingName =
-    user?.displayName ?? user?.name ?? user?.email ?? null;
+  const greetingName = user?.displayName ?? user?.name ?? user?.email ?? null;
   const greetingPrimary = "Hello,";
   const greetingSecondary = greetingName ? `${greetingName}!` : "there!";
 
@@ -90,9 +97,7 @@ export default function LiveStudioRightPanel({
     const dateLabel = formatDateLabel(focusedSession.start);
     const timeLabel = `${formatTimeCompact(
       focusedSession.start,
-    )} - ${formatTimeCompact(
-      focusedSession.end,
-    )}`;
+    )} - ${formatTimeCompact(focusedSession.end)}`;
     return { dateLabel, timeLabel };
   }, [focusedSession]);
 
@@ -115,7 +120,9 @@ export default function LiveStudioRightPanel({
 
   const joinWindow = useMemo(() => {
     if (!focusedSession) return null;
-    const joinOpenAt = new Date(focusedSession.start.getTime() - 10 * 60 * 1000);
+    const joinOpenAt = new Date(
+      focusedSession.start.getTime() - 10 * 60 * 1000,
+    );
     const joinCloseAt = new Date(focusedSession.end.getTime());
     return { joinOpenAt, joinCloseAt };
   }, [focusedSession]);
@@ -133,7 +140,11 @@ export default function LiveStudioRightPanel({
       return { label: "Session ended", disabled: true, state: "ended" };
     }
     if (focusedSession.status && focusedSession.status !== "scheduled") {
-      return { label: "Session unavailable", disabled: true, state: "unavailable" };
+      return {
+        label: "Session unavailable",
+        disabled: true,
+        state: "unavailable",
+      };
     }
     const maxParticipants = focusedSession.maxParticipants ?? 3;
     const participantCount = focusedSession.participantCount ?? 0;
@@ -166,14 +177,35 @@ export default function LiveStudioRightPanel({
     focusedSession?.id && pendingCancelSessionId === focusedSession.id,
   );
 
+  const shouldShowSkeleton =
+    isLoading && !focusedSession && upcomingSessions.length === 0;
+
+  if (shouldShowSkeleton) {
+    return (
+      <aside className="min-h-[50vh] rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] p-4">
+        <div className="animate-pulse space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="h-10 w-40 rounded-xl bg-[var(--studio-panel)]" />
+            <div className="flex items-center gap-2">
+              <div className="h-10 w-10 rounded-xl bg-[var(--studio-panel)]" />
+              <div className="h-10 w-10 rounded-xl bg-[var(--studio-panel)]" />
+            </div>
+          </div>
+          <div className="h-10 rounded-xl bg-[var(--studio-panel)]" />
+          <div className="h-[50vh] min-h-[360px] rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)]" />
+        </div>
+      </aside>
+    );
+  }
+
   if (collapsed) {
     return (
-      <aside className="rounded-[24px] border border-[var(--studio-border)] bg-[var(--studio-card)] shadow-[0_18px_45px_rgba(15,23,42,0.08)] transition-all duration-300">
-        <div className="flex flex-col items-center gap-4 px-3 py-4">
+      <aside className="rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] p-4 transition-all duration-300">
+        <div className="flex flex-col items-center gap-4">
           <button
             type="button"
             onClick={() => onCollapseChange(false)}
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)] transition hover:text-[var(--studio-text)]"
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)] transition hover:text-[var(--studio-text)]"
             aria-label="Expand panel"
           >
             <ChevronsRight className="h-4 w-4 rotate-180" />
@@ -193,7 +225,7 @@ export default function LiveStudioRightPanel({
               setShowSchedule(true);
               onCollapseChange(false);
             }}
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)] transition hover:text-[var(--studio-text)]"
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)] transition hover:text-[var(--studio-text)]"
             aria-label="Open schedule"
           >
             <CalendarDays className="h-4 w-4" />
@@ -204,8 +236,8 @@ export default function LiveStudioRightPanel({
   }
 
   return (
-    <aside className="rounded-[24px] border border-[var(--studio-border)] bg-[var(--studio-card)] shadow-[0_18px_45px_rgba(15,23,42,0.08)] transition-all duration-300">
-      <div className="flex items-start justify-between gap-4 px-5 pb-3 pt-4">
+    <aside className="min-h-[50vh] rounded-2xl border border-[var(--studio-border)] bg-[var(--studio-card)] p-4 transition-all duration-300">
+      <div className="flex items-start justify-between gap-4 pb-4">
         <div className="flex items-start gap-3">
           <AvatarBadge
             avatarUrl={user?.avatarUrl}
@@ -228,7 +260,7 @@ export default function LiveStudioRightPanel({
           <button
             type="button"
             onClick={onToggleTheme}
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)] transition hover:text-[var(--studio-text)]"
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)] transition hover:text-[var(--studio-text)]"
             aria-label="Toggle theme"
           >
             {theme === "light" ? (
@@ -240,7 +272,7 @@ export default function LiveStudioRightPanel({
           <button
             type="button"
             onClick={() => onCollapseChange(true)}
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)] transition hover:text-[var(--studio-text)]"
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)] transition hover:text-[var(--studio-text)]"
             aria-label="Collapse panel"
           >
             <ChevronsRight className="h-4 w-4 transition" />
@@ -248,11 +280,11 @@ export default function LiveStudioRightPanel({
         </div>
       </div>
 
-      <div className="border-t border-[var(--studio-border)] px-5 py-4">
+      <div className="border-t border-[var(--studio-border)] py-4">
         <button
           type="button"
           onClick={() => setShowSchedule((prev) => !prev)}
-          className="flex w-full items-center justify-between rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 py-2 text-sm font-semibold text-[var(--studio-text)] transition hover:-translate-y-0.5"
+          className="flex h-10 w-full items-center justify-between rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 text-sm font-semibold text-[var(--studio-text)] transition hover:-translate-y-0.5"
         >
           <span className="flex items-center gap-2">
             <CalendarDays className="h-4 w-4 text-[var(--studio-muted)]" />
@@ -268,8 +300,9 @@ export default function LiveStudioRightPanel({
                 <div className="flex flex-col gap-3">
                   {upcomingSessions.map((session) => {
                     const listTaskLabel =
-                      TASK_OPTIONS.find((option) => option.value === session.task)
-                        ?.label ?? "Session";
+                      TASK_OPTIONS.find(
+                        (option) => option.value === session.task,
+                      )?.label ?? "Session";
                     const listHostLabel =
                       session.hostDisplayName ?? "Focus Host";
                     return (
@@ -322,7 +355,7 @@ export default function LiveStudioRightPanel({
         ) : null}
       </div>
 
-      <div className="border-t border-[var(--studio-border)] px-5 py-4">
+      <div className="border-t border-[var(--studio-border)] pt-4">
         <div className="rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 py-3">
           {focusedSession ? (
             <div className="flex flex-col gap-3">
@@ -360,8 +393,10 @@ export default function LiveStudioRightPanel({
                   <div className="flex flex-col gap-2">
                     <button
                       type="button"
-                      onClick={() => onPublicAction?.("join", focusedSession.id)}
-                      className="h-10 w-full rounded-xl bg-[var(--studio-accent)] text-sm font-semibold text-white shadow-[0_12px_26px_rgba(91,92,226,0.32)] transition hover:-translate-y-0.5"
+                      onClick={() =>
+                        onPublicAction?.("join", focusedSession.id)
+                      }
+                      className="h-11 w-full rounded-xl bg-[var(--studio-accent)] text-sm font-semibold text-white shadow-[0_12px_26px_rgba(91,92,226,0.32)] transition hover:-translate-y-0.5"
                     >
                       {publicCtaLabel}
                     </button>
@@ -386,14 +421,14 @@ export default function LiveStudioRightPanel({
                     <button
                       type="button"
                       onClick={() => onConfirmCancel?.(focusedSession.id)}
-                      className="h-9 rounded-lg border border-rose-500/40 bg-rose-500/10 text-xs font-semibold text-rose-500 transition hover:-translate-y-0.5"
+                      className="h-10 rounded-xl border border-rose-500/40 bg-rose-500/10 text-xs font-semibold text-rose-500 transition hover:-translate-y-0.5"
                     >
                       Confirm
                     </button>
                     <button
                       type="button"
                       onClick={() => onDismissCancel?.()}
-                      className="h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-panel)] text-xs font-semibold text-[var(--studio-text)] transition hover:-translate-y-0.5"
+                      className="h-10 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] text-xs font-semibold text-[var(--studio-text)] transition hover:-translate-y-0.5"
                     >
                       Keep
                     </button>
@@ -407,13 +442,15 @@ export default function LiveStudioRightPanel({
                     if (joinState?.disabled || !focusedSession) return;
                     onJoinSession(focusedSession);
                   }}
-                  className={`h-10 w-full rounded-xl text-sm font-semibold transition ${
+                  className={`h-11 w-full rounded-xl text-sm font-semibold transition ${
                     joinState?.disabled || isJoining
                       ? "cursor-not-allowed border border-[var(--studio-border)] bg-[var(--studio-card)] text-[var(--studio-muted)]"
                       : "bg-[var(--studio-accent)] text-white shadow-[0_12px_26px_rgba(91,92,226,0.32)] hover:-translate-y-0.5"
                   }`}
                 >
-                  {isJoining ? "Joining..." : joinState?.label ?? "Join session"}
+                  {isJoining
+                    ? "Joining..."
+                    : (joinState?.label ?? "Join session")}
                 </button>
               )}
 
