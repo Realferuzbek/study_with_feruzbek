@@ -3,7 +3,12 @@
 import Image from "next/image";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  RefreshCw,
+} from "lucide-react";
 import { TASK_OPTIONS, type StudioTask } from "./liveStudioOptions";
 
 export type StudioBookingStatus =
@@ -103,6 +108,14 @@ function formatWeekday(date: Date) {
   return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
 }
 
+function isSameDay(left: Date, right: Date) {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
+}
+
 function formatHourLabel(hour: number) {
   const hour12 = hour % 12 || 12;
   const suffix = hour >= 12 ? "pm" : "am";
@@ -144,6 +157,10 @@ function initialsFromLabel(label?: string | null, fallback = "U") {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function cx(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
 }
 
 export default function LiveStudioCalendar3Day({
@@ -394,6 +411,7 @@ export default function LiveStudioCalendar3Day({
 
   const previewRange = dragging ? resolveRange(dragging) : null;
   const previewDayIndex = dragging?.dayIndex ?? null;
+  const today = startOfDay(now);
 
   const calendarVars = useMemo(
     () =>
@@ -438,7 +456,7 @@ export default function LiveStudioCalendar3Day({
       style={calendarVars}
     >
       <div className="overflow-hidden rounded-xl border border-[var(--studio-border)] bg-[var(--studio-card)]">
-        <div className="flex flex-col gap-2 border-b border-[var(--studio-border)] px-4 py-4">
+        <div className="flex flex-col gap-2 border-b border-[var(--studio-border)] bg-[var(--studio-panel)] px-4 py-4">
           <div className="grid grid-cols-[var(--studio-time-gutter-width)_1fr] items-center gap-3">
             <div aria-hidden />
             <div className="flex flex-wrap items-center gap-3">
@@ -484,6 +502,24 @@ export default function LiveStudioCalendar3Day({
                     <ChevronRight className="h-4 w-4" />
                   </button>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  disabled={!onRetry || isLoading}
+                  className={cx(
+                    "inline-flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition",
+                    !onRetry || isLoading
+                      ? "cursor-not-allowed border-[var(--studio-border)] bg-[var(--studio-card)] text-[var(--studio-muted)]"
+                      : "border-[var(--studio-border)] bg-[var(--studio-card)] text-[var(--studio-text)] hover:-translate-y-0.5",
+                  )}
+                  aria-label="Refresh sessions"
+                >
+                  <RefreshCw
+                    className={cx("h-4 w-4", isLoading && "animate-spin")}
+                  />
+                  <span className="hidden sm:inline">Refresh</span>
+                </button>
               </div>
             </div>
           </div>
@@ -516,38 +552,50 @@ export default function LiveStudioCalendar3Day({
           </div>
         </div>
 
-        <div className="grid grid-cols-[var(--studio-time-gutter-width)_1fr] border-b border-[var(--studio-border)] bg-[var(--studio-card)] text-[12px] text-[var(--studio-muted)]">
+        <div className="grid grid-cols-[var(--studio-time-gutter-width)_1fr] border-b border-[var(--studio-border)] bg-[var(--studio-panel)] text-[12px] text-[var(--studio-muted)]">
           <div
-            className="py-2.5 text-[10px] font-semibold text-right"
+            className="border-r border-[var(--studio-grid-strong)] py-2.5 text-right text-[10px] font-semibold uppercase tracking-[0.14em]"
             style={{
               paddingLeft: "var(--studio-time-gutter-padding)",
               paddingRight: "var(--studio-time-gutter-padding)",
             }}
           >
-            {getTimezoneLabel()}
+            UTC{getTimezoneLabel()}
           </div>
           <div className="grid grid-cols-3">
-            {days.map((day) => (
-              <div
-                key={day.toISOString()}
-                className="px-3 py-2.5 text-[13px] font-semibold text-[var(--studio-text)]"
-                style={daySeparatorStyle}
-              >
-                <span className="text-[var(--studio-muted)]">
-                  {formatWeekday(day)}
-                </span>{" "}
-                {day.getDate()}
-              </div>
-            ))}
+            {days.map((day, index) => {
+              const isToday = isSameDay(day, today);
+              return (
+                <div
+                  key={day.toISOString()}
+                  className="px-3 py-2.5 text-[13px] font-semibold text-[var(--studio-text)]"
+                  style={index === 0 ? undefined : daySeparatorStyle}
+                >
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--studio-muted)]">
+                    {formatWeekday(day)}
+                  </span>
+                  <span
+                    className={cx(
+                      "ml-2 inline-flex min-w-6 items-center justify-center rounded-full px-2 py-0.5 text-[12px] font-semibold",
+                      isToday
+                        ? "bg-[var(--studio-accent)] text-white"
+                        : "bg-[var(--studio-card)] text-[var(--studio-text)]",
+                    )}
+                  >
+                    {day.getDate()}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
         <div
           ref={scrollRef}
-          className="grid max-h-[70vh] grid-cols-[var(--studio-time-gutter-width)_1fr] overflow-y-auto"
+          className="relative grid max-h-[70vh] grid-cols-[var(--studio-time-gutter-width)_1fr] overflow-y-auto bg-[var(--studio-card)]"
         >
           <div
-            className="relative bg-[var(--studio-panel)]"
+            className="relative border-r border-[var(--studio-grid-strong)] bg-[var(--studio-panel)]"
             style={{ height: totalHeight }}
           >
             {Array.from({ length: totalSlots }).map((_, slot) => {
@@ -569,7 +617,7 @@ export default function LiveStudioCalendar3Day({
                     className={
                       isHour
                         ? "text-[12px] font-semibold leading-none text-[var(--studio-text)]"
-                        : "text-[10px] leading-none text-[var(--studio-subtle)]"
+                        : "text-[10px] leading-none text-[var(--studio-muted)]"
                     }
                     style={{
                       transform: `translateY(${
@@ -582,20 +630,6 @@ export default function LiveStudioCalendar3Day({
                 </div>
               );
             })}
-
-            {isTodayVisible ? (
-              <div
-                className="absolute flex items-center gap-2"
-                style={{
-                  top: nowTop - 8,
-                  left: "var(--studio-time-gutter-padding)",
-                }}
-              >
-                <span className="rounded-full bg-[var(--studio-card)] px-2 py-0.5 text-[10px] font-semibold text-rose-500 shadow-sm">
-                  {formatTimeCompact(now)}
-                </span>
-              </div>
-            ) : null}
           </div>
 
           <div
@@ -617,7 +651,7 @@ export default function LiveStudioCalendar3Day({
                       className={
                         isHour
                           ? "border-t border-solid border-[var(--studio-grid-strong)]"
-                          : "border-t border-dashed border-[var(--studio-grid)]"
+                          : "border-t border-solid border-[var(--studio-grid)]"
                       }
                     />
                   );
@@ -625,10 +659,13 @@ export default function LiveStudioCalendar3Day({
               </div>
 
               <div className="absolute inset-0 grid grid-cols-3">
-                {days.map((day) => (
+                {days.map((day, index) => (
                   <div
                     key={`${day.toISOString()}-divider`}
-                    className="border-l border-[var(--studio-grid-strong)]"
+                    className={cx(
+                      "border-[var(--studio-grid-strong)]",
+                      index === 0 ? "border-l-0" : "border-l",
+                    )}
                   />
                 ))}
               </div>
@@ -641,7 +678,10 @@ export default function LiveStudioCalendar3Day({
                   columnRefs.current[dayIndex] = node;
                 }}
                 onMouseDown={(event) => handleMouseDown(dayIndex, event)}
-                className="relative z-10 select-none bg-[var(--studio-card)]"
+                className={cx(
+                  "relative z-10 select-none bg-[var(--studio-card)] transition-colors",
+                  !isReadOnly && "hover:bg-[var(--studio-panel)]",
+                )}
               >
                 {bookingsByDay[dayIndex]?.map((bookingItem) => (
                   <CalendarBlock
@@ -686,14 +726,21 @@ export default function LiveStudioCalendar3Day({
                 ) : null}
               </div>
             ))}
-
-            {isTodayVisible ? (
-              <div
-                className="pointer-events-none absolute left-0 right-0 z-20 h-px bg-rose-500"
-                style={{ top: nowTop }}
-              />
-            ) : null}
           </div>
+
+          {isTodayVisible ? (
+            <div
+              className="pointer-events-none absolute inset-x-0 z-30 grid grid-cols-[var(--studio-time-gutter-width)_1fr]"
+              style={{ top: nowTop }}
+            >
+              <div className="relative border-t border-rose-500/80">
+                <span className="absolute -top-[9px] right-2 rounded-full bg-[var(--studio-card)] px-2 py-0.5 text-[10px] font-semibold text-rose-500 shadow-sm">
+                  {formatTimeCompact(now)}
+                </span>
+              </div>
+              <div className="border-t border-rose-500" />
+            </div>
+          ) : null}
         </div>
       </div>
     </section>
@@ -761,31 +808,48 @@ function CalendarBlock({
   const isCancelled = status === "cancelled";
   const isCompleted = status === "completed";
   const statusLabel = isCancelled ? "Cancelled" : isCompleted ? "Ended" : null;
+  const timeLabel = `${formatTimeCompact(start)} - ${formatTimeCompact(end)}`;
+
+  if (isDraft) {
+    return (
+      <div
+        className="pointer-events-none absolute left-2 right-2 z-20 overflow-hidden rounded-xl border-2 border-[var(--studio-accent)] bg-[var(--studio-accent-soft)] shadow-[0_14px_30px_rgba(91,92,226,0.2)]"
+        style={{ top, height }}
+      >
+        <div className="h-full w-full bg-[linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.28)_50%,transparent_100%)]" />
+        <div className="absolute left-2 right-2 top-1.5 truncate rounded-md bg-[var(--studio-card)] px-2 py-0.5 text-[10px] font-semibold text-[var(--studio-accent-ink)]">
+          Selecting {timeLabel}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
-      role={isDraft ? undefined : "button"}
-      tabIndex={isDraft ? undefined : 0}
-      onClick={
-        isDraft
-          ? undefined
-          : (event) => {
-              event.stopPropagation();
-              onSelect?.();
-            }
-      }
-      onMouseDown={
-        isDraft
-          ? undefined
-          : (event) => {
-              event.stopPropagation();
-            }
-      }
-      className={`absolute left-2 right-2 rounded-2xl border border-[var(--studio-booking-border)] bg-[var(--studio-booking-bg)] px-2 py-2 text-xs text-[var(--studio-booking-text)] shadow-[0_12px_26px_rgba(15,23,42,0.12)] ${
-        isDraft ? "pointer-events-none opacity-70" : "cursor-pointer"
-      } ${isSelected ? "ring-2 ring-[var(--studio-accent)]" : ""} ${
-        isCancelled ? "opacity-55" : ""
-      }`}
+      role="button"
+      tabIndex={0}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect?.();
+      }}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          event.stopPropagation();
+          onSelect?.();
+        }
+      }}
+      className={cx(
+        "absolute left-2 right-2 cursor-pointer rounded-2xl border border-[var(--studio-booking-border)] bg-[var(--studio-booking-bg)] px-2 py-2 text-xs text-[var(--studio-booking-text)] shadow-[0_12px_26px_rgba(15,23,42,0.12)] transition-all duration-150",
+        "hover:-translate-y-0.5 hover:shadow-[0_16px_30px_rgba(15,23,42,0.2)]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--studio-accent)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--studio-card)]",
+        isSelected &&
+          "border-[var(--studio-accent)] ring-2 ring-[var(--studio-accent)] ring-offset-1 ring-offset-[var(--studio-card)] shadow-[0_16px_30px_rgba(91,92,226,0.28)]",
+        isCancelled && "opacity-55",
+      )}
       style={{ top, height }}
     >
       <div className="flex items-center gap-2">
@@ -807,7 +871,7 @@ function CalendarBlock({
             {taskOption?.label ?? "Session"}
           </span>
           <span className="text-[10px] text-[var(--studio-booking-muted)]">
-            {formatTimeCompact(start)} - {formatTimeCompact(end)}
+            {timeLabel}
           </span>
           {hostLabel ? (
             <span className="text-[10px] text-[var(--studio-booking-muted)]">
