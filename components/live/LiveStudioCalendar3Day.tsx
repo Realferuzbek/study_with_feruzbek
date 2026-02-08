@@ -73,6 +73,7 @@ const TIME_GUTTER_PADDING = 10;
 const DAY_SEPARATOR_THICKNESS = 1;
 const HOUR_LABEL_OFFSET = -2;
 const QUARTER_LABEL_OFFSET = -1;
+const COMPACT_BOOKING_HEIGHT_PX = 88;
 
 type DragState = {
   dayIndex: number;
@@ -808,10 +809,13 @@ function CalendarBlock({
   );
   const height = Math.max(slotHeight, durationSlots * slotHeight);
   const top = startSlot * slotHeight;
-  const hostLabel = isHost
-    ? (user?.name ?? hostDisplayName ?? null)
-    : (hostDisplayName ?? null);
+  const hostLabel =
+    (hostDisplayName ?? user?.name ?? user?.email ?? "").trim() || "Focus Host";
+  const hostLine = isHost ? "Host: you" : `Hosted by ${hostLabel}`;
   const initials = initialsFromLabel(hostLabel, "FS");
+  const isCompact = height < COMPACT_BOOKING_HEIGHT_PX;
+  const showHostBadge = isHost || myRole === "host";
+  const showReservedBadge = isParticipant && myRole === "participant";
 
   const isCancelled = status === "cancelled";
   const isCompleted = status === "completed";
@@ -851,7 +855,7 @@ function CalendarBlock({
         }
       }}
       className={cx(
-        "absolute left-2 right-2 cursor-pointer rounded-2xl border border-[var(--studio-booking-border)] bg-[var(--studio-booking-bg)] px-2 py-2 text-xs text-[var(--studio-booking-text)] shadow-[0_12px_26px_rgba(15,23,42,0.12)] transition-all duration-150",
+        "absolute left-2 right-2 cursor-pointer overflow-hidden rounded-2xl border border-[var(--studio-booking-border)] bg-[var(--studio-booking-bg)] px-2 py-2 text-xs text-[var(--studio-booking-text)] shadow-[0_12px_26px_rgba(15,23,42,0.12)] transition-all duration-150",
         "hover:-translate-y-0.5 hover:shadow-[0_16px_30px_rgba(15,23,42,0.2)]",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--studio-accent)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--studio-card)]",
         isSelected &&
@@ -860,55 +864,92 @@ function CalendarBlock({
       )}
       style={{ top, height }}
     >
-      <div className="flex items-center gap-2">
-        <div className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-full bg-[var(--studio-card)] shadow-sm">
-          {isHost && user?.avatarUrl ? (
-            <Image
-              src={user.avatarUrl}
-              alt="Booked session avatar"
-              width={28}
-              height={28}
-              className="h-7 w-7 rounded-full object-cover"
-            />
-          ) : (
-            <span className="text-[10px] font-semibold">{initials}</span>
-          )}
-        </div>
-        <div className="flex flex-col">
-          <span className="font-semibold text-[var(--studio-booking-text)]">
-            {taskOption?.label ?? "Session"}
-          </span>
-          <span className="text-[10px] text-[var(--studio-booking-muted)]">
-            {timeLabel}
-          </span>
-          {hostLabel ? (
-            <span className="text-[10px] text-[var(--studio-booking-muted)]">
-              Host: {hostLabel}
+      {isCompact ? (
+        <div className="flex h-full min-h-0 flex-col justify-between gap-0.5 overflow-hidden">
+          <div className="min-w-0">
+            <span className="block truncate font-semibold text-[var(--studio-booking-text)]">
+              {taskOption?.label ?? "Session"}
             </span>
+            <span className="block truncate text-[10px] text-[var(--studio-booking-muted)]">
+              {timeLabel}
+            </span>
+          </div>
+          <div className="mt-auto flex min-w-0 items-center gap-1 overflow-hidden">
+            {showHostBadge ? (
+              <span className="inline-flex shrink-0 items-center rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-sky-600">
+                Host
+              </span>
+            ) : null}
+            {showReservedBadge ? (
+              <span className="inline-flex shrink-0 items-center rounded-full border border-[var(--studio-accent)] bg-[var(--studio-card)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--studio-accent-ink)]">
+                Reserved
+              </span>
+            ) : null}
+            {statusLabel ? (
+              <span className="inline-flex shrink-0 items-center rounded-full border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-rose-500">
+                {statusLabel}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <div className="flex h-full min-h-0 flex-col gap-1 overflow-hidden">
+          <div className="flex min-w-0 items-start gap-2">
+            <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[var(--studio-card)] shadow-sm">
+              {isHost && user?.avatarUrl ? (
+                <Image
+                  src={user.avatarUrl}
+                  alt="Booked session avatar"
+                  width={24}
+                  height={24}
+                  className="h-6 w-6 rounded-full object-cover"
+                />
+              ) : (
+                <span className="text-[9px] font-semibold">{initials}</span>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <span className="block truncate font-semibold text-[var(--studio-booking-text)]">
+                {taskOption?.label ?? "Session"}
+              </span>
+              <span className="block truncate text-[10px] text-[var(--studio-booking-muted)]">
+                {timeLabel}
+              </span>
+              <span className="block truncate text-[10px] text-[var(--studio-booking-muted)]">
+                {hostLine}
+              </span>
+            </div>
+          </div>
+          {typeof participantCount === "number" &&
+          typeof maxParticipants === "number" ? (
+            <div className="truncate text-[10px] font-semibold text-[var(--studio-booking-muted)]">
+              {participantCount}/{maxParticipants} participants
+            </div>
           ) : null}
+          <div className="mt-auto flex min-w-0 items-center gap-1 overflow-hidden">
+            {showHostBadge ? (
+              <span className="inline-flex shrink-0 items-center rounded-full border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-sky-600">
+                Host
+              </span>
+            ) : null}
+            {showReservedBadge ? (
+              <span className="inline-flex shrink-0 items-center rounded-full border border-[var(--studio-accent)] bg-[var(--studio-card)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--studio-accent-ink)]">
+                Reserved
+              </span>
+            ) : null}
+            {statusLabel ? (
+              <span className="inline-flex shrink-0 items-center rounded-full border border-rose-500/40 bg-rose-500/10 px-1.5 py-0.5 text-[9px] font-semibold text-rose-500">
+                {statusLabel}
+              </span>
+            ) : null}
+            {isOptimistic ? (
+              <span className="inline-flex shrink-0 items-center rounded-full border border-[var(--studio-accent)] bg-[var(--studio-card)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--studio-accent)]">
+                Booking...
+              </span>
+            ) : null}
+          </div>
         </div>
-      </div>
-      {typeof participantCount === "number" &&
-      typeof maxParticipants === "number" ? (
-        <div className="mt-1 text-[10px] font-semibold text-[var(--studio-booking-muted)]">
-          {participantCount}/{maxParticipants} participants
-        </div>
-      ) : null}
-      {isParticipant && myRole === "participant" ? (
-        <div className="mt-1 inline-flex w-fit rounded-full border border-[var(--studio-accent)] bg-[var(--studio-card)] px-2 py-0.5 text-[10px] font-semibold text-[var(--studio-accent-ink)]">
-          Reserved
-        </div>
-      ) : null}
-      {statusLabel ? (
-        <div className="mt-1 text-[10px] font-semibold text-rose-500">
-          {statusLabel}
-        </div>
-      ) : null}
-      {isOptimistic ? (
-        <div className="mt-1 text-[10px] font-semibold text-[var(--studio-accent)]">
-          Booking...
-        </div>
-      ) : null}
+      )}
     </div>
   );
 }

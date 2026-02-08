@@ -29,9 +29,10 @@ const THEME_STORAGE_KEY = "studymate-live-studio-theme";
 const DEFAULT_TITLE = "Focus Session";
 const ALLOWED_DURATIONS = new Set([30, 60, 120]);
 const EMPTY_SESSIONS: StudioBooking[] = [];
-const ACTIVE_POLL_INTERVAL_MS = 1_000;
-const IDLE_POLL_INTERVAL_MS = 5_000;
-const MAX_IDLE_POLL_INTERVAL_MS = 10_000;
+const ACTIVE_POLL_INTERVAL_MS = 8_000;
+const IDLE_POLL_INTERVAL_MS = 25_000;
+const MAX_IDLE_POLL_INTERVAL_MS = 60_000;
+const SESSION_STATUS_CLOCK_INTERVAL_MS = 30_000;
 
 type DateRange = {
   from: Date;
@@ -39,6 +40,11 @@ type DateRange = {
 };
 
 type RefreshSessionsResult = "updated" | "unchanged" | "error";
+type RefreshSessionsMode = "manual" | "background";
+type RefreshSessionsOptions = {
+  rangeOverride?: DateRange;
+  mode: RefreshSessionsMode;
+};
 
 type SessionCacheEntry = {
   sessions: StudioBooking[];
@@ -138,7 +144,11 @@ function canAutoJoin(session: StudioBooking, currentUserId?: string | null) {
   const isHost = Boolean(
     session.hostId && currentUserId && session.hostId === currentUserId,
   );
-  const isParticipant = session.isParticipant === true;
+  const isParticipant =
+    session.isParticipant === true || session.myRole === "participant";
+  if (!isHost && !isParticipant) {
+    return false;
+  }
   if (participantCount >= maxParticipants && !isHost && !isParticipant) {
     return false;
   }
@@ -179,6 +189,13 @@ function hasLiveActivityWindow(session: StudioBooking, nowMs: number) {
     (session.status === "active" && nowMs <= endMs + 60_000) ||
     (nowMs >= startMs - 10 * 60_000 && nowMs <= endMs + 60_000)
   );
+}
+
+function isUpcomingSession(session: StudioBooking, nowMs: number) {
+  if (session.status === "cancelled" || session.status === "completed") {
+    return false;
+  }
+  return session.end.getTime() > nowMs;
 }
 
 export default function LiveStreamStudioShell({
@@ -231,10 +248,14 @@ export default function LiveStreamStudioShell({
       ? true
       : document.visibilityState === "visible",
   );
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const previousVisibilityRef = useRef(isPageVisible);
+  const selectedSessionStatusNoticeRef = useRef<string | null>(null);
+  const selectedSessionSnapshotRef = useRef<StudioBooking | null>(null);
 
-  const publicJoinLabel = "Continue to join";
-  const publicJoinHelperText = "You're one step away from joining.";
+  const publicJoinLabel = "Reserve spot";
+  const publicJoinHelperText =
+    "Sign in to reserve a spot. Reservations close 5 minutes before start.";
   const publicBookLabel = "Continue to book";
   const publicBookHelperText = "You're one step away from booking.";
 
@@ -263,9 +284,9 @@ export default function LiveStreamStudioShell({
   );
   const isBookCtaDisabled = !isPublic && !hasValidBookingSelection;
   const hasRealtimeSessions = useMemo(() => {
-    const nowMs = Date.now();
+    const nowMs = nowTick;
     return sessions.some((session) => hasLiveActivityWindow(session, nowMs));
-  }, [sessions]);
+  }, [nowTick, sessions]);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
@@ -286,6 +307,16 @@ export default function LiveStreamStudioShell({
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setNowTick(Date.now()),
+      SESSION_STATUS_CLOCK_INTERVAL_MS,
+    );
+    return () => {
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -321,25 +352,29 @@ export default function LiveStreamStudioShell({
   );
 
   const refreshSessions = useCallback(
-    async (rangeOverride?: DateRange): Promise<RefreshSessionsResult> => {
-      const rangeToUse = rangeOverride ?? visibleRangeRef.current;
+    async (options?: RefreshSessionsOptions): Promise<RefreshSessionsResult> => {
+      const rangeToUse = options?.rangeOverride ?? visibleRangeRef.current;
+      const mode = options?.mode ?? "background";
+      const isManual = mode === "manual";
       if (!rangeToUse?.from || !rangeToUse?.to) return "error";
       const rangeKey = buildRangeKey(rangeToUse);
-      setSessionsCache((prev) => {
-        const entry = prev[rangeKey] ?? {
-          sessions: [],
-          isLoading: false,
-          updatedAt: 0,
-          error: null,
-        };
-        return {
-          ...prev,
-          [rangeKey]: {
-            ...entry,
-            isLoading: true,
-          },
-        };
-      });
+      if (isManual) {
+        setSessionsCache((prev) => {
+          const entry = prev[rangeKey] ?? {
+            sessions: [],
+            isLoading: false,
+            updatedAt: 0,
+            error: null,
+          };
+          return {
+            ...prev,
+            [rangeKey]: {
+              ...entry,
+              isLoading: true,
+            },
+          };
+        });
+      }
       const params = new URLSearchParams({
         from: rangeToUse.from.toISOString(),
         to: rangeToUse.to.toISOString(),
@@ -378,6 +413,7 @@ export default function LiveStreamStudioShell({
           setSessionsCache((prev) => {
             const entry = prev[rangeKey];
             if (!entry) return prev;
+            if (entry.error === message && !isManual) return prev;
             return {
               ...prev,
               [rangeKey]: {
@@ -402,9 +438,17 @@ export default function LiveStreamStudioShell({
             .filter((session): session is StudioBooking => Boolean(session)) ??
           [];
         let didChange = false;
+        let didMutateEntry = false;
         setSessionsCache((prev) => {
+          const entry = prev[rangeKey] ?? {
+            sessions: [],
+            isLoading: false,
+            updatedAt: 0,
+            error: null,
+          };
+          const hadEntry = Boolean(prev[rangeKey]);
           const optimisticSessions =
-            prev[rangeKey]?.sessions?.filter(
+            entry.sessions?.filter(
               (session) => session.isOptimistic,
             ) ?? [];
           const mergedSessions = [
@@ -420,22 +464,41 @@ export default function LiveStreamStudioShell({
           const nextSignature = buildSessionsSignature(sortedSessions);
           didChange = previousSignature !== nextSignature;
           sessionsSignatureByRangeRef.current[rangeKey] = nextSignature;
+          const shouldResetError = entry.error !== null;
+          const shouldUpdateEntry = !hadEntry || didChange || shouldResetError;
+          if (!shouldUpdateEntry && !isManual) {
+            return prev;
+          }
+          if (!shouldUpdateEntry && isManual) {
+            return prev;
+          }
+          didMutateEntry = true;
           return {
             ...prev,
             [rangeKey]: {
+              ...entry,
               sessions: sortedSessions,
-              isLoading: false,
-              updatedAt: Date.now(),
+              isLoading: isManual ? false : entry.isLoading,
+              updatedAt:
+                didChange || !hadEntry || shouldResetError
+                  ? Date.now()
+                  : entry.updatedAt,
               error: null,
             },
           };
         });
+        if (!didMutateEntry && !didChange) {
+          return "unchanged";
+        }
         return didChange ? "updated" : "unchanged";
       } catch (err) {
         console.error(err);
         setSessionsCache((prev) => {
           const entry = prev[rangeKey];
           if (!entry) return prev;
+          if (!isManual && entry.error === "Failed to load sessions.") {
+            return prev;
+          }
           return {
             ...prev,
             [rangeKey]: {
@@ -446,17 +509,19 @@ export default function LiveStreamStudioShell({
         });
         return "error";
       } finally {
-        setSessionsCache((prev) => {
-          const entry = prev[rangeKey];
-          if (!entry) return prev;
-          return {
-            ...prev,
-            [rangeKey]: {
-              ...entry,
-              isLoading: false,
-            },
-          };
-        });
+        if (isManual) {
+          setSessionsCache((prev) => {
+            const entry = prev[rangeKey];
+            if (!entry) return prev;
+            return {
+              ...prev,
+              [rangeKey]: {
+                ...entry,
+                isLoading: false,
+              },
+            };
+          });
+        }
       }
     },
     [isPublic, sessionsEndpoint],
@@ -466,7 +531,7 @@ export default function LiveStreamStudioShell({
     if (!hasLoadedInitialRangeRef.current) {
       hasLoadedInitialRangeRef.current = true;
       unchangedPollCountRef.current = 0;
-      void refreshSessions();
+      void refreshSessions({ mode: "manual" });
       return;
     }
 
@@ -477,7 +542,7 @@ export default function LiveStreamStudioShell({
 
     rangeRefreshDebounceRef.current = window.setTimeout(() => {
       unchangedPollCountRef.current = 0;
-      void refreshSessions();
+      void refreshSessions({ mode: "manual" });
       rangeRefreshDebounceRef.current = null;
     }, 220);
 
@@ -516,7 +581,7 @@ export default function LiveStreamStudioShell({
     };
 
     const runPoll = async () => {
-      const result = await refreshSessions();
+      const result = await refreshSessions({ mode: "background" });
       if (cancelled) return;
       if (result === "updated") {
         unchangedPollCountRef.current = 0;
@@ -554,18 +619,53 @@ export default function LiveStreamStudioShell({
     if (wasVisible === isPageVisible) return;
     if (!hasLoadedInitialRangeRef.current) return;
     unchangedPollCountRef.current = 0;
-    void refreshSessions();
+    void refreshSessions({ mode: "background" });
   }, [isAuthenticated, isPageVisible, isPublic, refreshSessions]);
 
   useEffect(() => {
     if (!selectedSessionId) return;
-    const stillExists = sessions.some(
+    const nowMs = nowTick;
+    const selectedSession = sessions.find(
       (session) => session.id === selectedSessionId,
     );
-    if (!stillExists) {
-      setSelectedSessionId(null);
+    if (selectedSession) {
+      selectedSessionSnapshotRef.current = selectedSession;
+      const normalizedStatus = (selectedSession.status ?? "scheduled").toLowerCase();
+      const isCancelled = normalizedStatus === "cancelled";
+      const isEnded =
+        normalizedStatus === "completed" ||
+        selectedSession.end.getTime() <= nowMs;
+      if (isCancelled || isEnded) {
+        const message = isCancelled ? "Session cancelled." : "Session ended.";
+        const noticeKey = `${selectedSession.id}:${message}`;
+        if (selectedSessionStatusNoticeRef.current !== noticeKey) {
+          selectedSessionStatusNoticeRef.current = noticeKey;
+          setNotice(message);
+        }
+        setSelectedSessionId(null);
+      }
+      return;
     }
-  }, [selectedSessionId, sessions]);
+
+    const previousSnapshot = selectedSessionSnapshotRef.current;
+    if (!previousSnapshot || previousSnapshot.id !== selectedSessionId) {
+      setSelectedSessionId(null);
+      return;
+    }
+
+    const snapshotStatus = (previousSnapshot.status ?? "scheduled").toLowerCase();
+    const wasCancelled = snapshotStatus === "cancelled";
+    const hasEnded = previousSnapshot.end.getTime() <= nowMs;
+    if (wasCancelled || hasEnded) {
+      const message = wasCancelled ? "Session cancelled." : "Session ended.";
+      const noticeKey = `${previousSnapshot.id}:${message}`;
+      if (selectedSessionStatusNoticeRef.current !== noticeKey) {
+        selectedSessionStatusNoticeRef.current = noticeKey;
+        setNotice(message);
+      }
+    }
+    setSelectedSessionId(null);
+  }, [nowTick, selectedSessionId, sessions]);
 
   useEffect(() => {
     if (!pendingCancelSessionId) return;
@@ -610,7 +710,7 @@ export default function LiveStreamStudioShell({
 
   const handleRetrySessions = useCallback(() => {
     unchangedPollCountRef.current = 0;
-    void refreshSessions();
+    void refreshSessions({ mode: "manual" });
   }, [refreshSessions]);
 
   const handleJoinSession = useCallback(
@@ -727,7 +827,7 @@ export default function LiveStreamStudioShell({
           setNotice("Spot reserved.");
         }
         unchangedPollCountRef.current = 0;
-        void refreshSessions();
+        void refreshSessions({ mode: "background" });
       } catch (err) {
         console.error(err);
         setNotice("Unable to reserve spot.");
@@ -792,7 +892,7 @@ export default function LiveStreamStudioShell({
           setNotice("Reservation cancelled.");
         }
         unchangedPollCountRef.current = 0;
-        void refreshSessions();
+        void refreshSessions({ mode: "background" });
       } catch (err) {
         console.error(err);
         setNotice("Unable to cancel reservation.");
@@ -804,12 +904,14 @@ export default function LiveStreamStudioShell({
   );
 
   useEffect(() => {
-    if (!intent || !user?.id) return;
+    if (!intent) return;
     const key = `${intent}:${intentSessionId ?? ""}`;
     if (handledIntentRef.current === key) return;
 
     if (intent === "book") {
-      handleBookClick();
+      if (user?.id) {
+        handleBookClick();
+      }
       handledIntentRef.current = key;
       return;
     }
@@ -827,10 +929,10 @@ export default function LiveStreamStudioShell({
     setSelectedSessionId(targetSession.id);
 
     if (intent === "join") {
-      if (canAutoJoin(targetSession, user?.id ?? null)) {
+      if (user?.id && canAutoJoin(targetSession, user?.id ?? null)) {
         handleJoinSession(targetSession);
       }
-    } else if (intent === "cancel") {
+    } else if (intent === "cancel" && user?.id) {
       setPendingCancelSessionId(targetSession.id);
     }
 
@@ -944,7 +1046,7 @@ export default function LiveStreamStudioShell({
         }
         setNotice("Session booked.");
         unchangedPollCountRef.current = 0;
-        void refreshSessions();
+        void refreshSessions({ mode: "background" });
       } catch (err) {
         console.error(err);
         setNotice("Unable to book session.");
@@ -958,39 +1060,31 @@ export default function LiveStreamStudioShell({
     [selectedSessionId, sessions],
   );
 
-  const nextUserSession = useMemo(() => {
-    if (!user?.id) return null;
-    const now = new Date();
-    return (
-      sessions
-        .filter(
-          (session) =>
-            session.hostId === user.id &&
-            session.end.getTime() >= now.getTime() &&
-            session.status !== "cancelled" &&
-            session.status !== "completed",
-        )
-        .sort((a, b) => a.start.getTime() - b.start.getTime())[0] ?? null
-    );
-  }, [sessions, user?.id]);
-
-  const publicUpcomingSessions = useMemo(() => {
-    if (!isPublic) return [];
-    const now = new Date();
+  const upcomingUserSessions = useMemo(() => {
+    if (isPublic || !user?.id) return [];
+    const nowMs = nowTick;
     return sessions
       .filter(
         (session) =>
-          session.end.getTime() >= now.getTime() &&
-          session.status !== "cancelled" &&
-          session.status !== "completed",
+          isUpcomingSession(session, nowMs) &&
+          (session.hostId === user.id || session.isParticipant === true),
       )
       .sort((a, b) => a.start.getTime() - b.start.getTime());
-  }, [isPublic, sessions]);
+  }, [isPublic, nowTick, sessions, user?.id]);
 
-  const publicFeaturedSession = publicUpcomingSessions[0] ?? null;
+  const nextUpcomingUserSession = upcomingUserSessions[0] ?? null;
+
+  const publicUpcomingSessions = useMemo(() => {
+    if (!isPublic) return [];
+    const nowMs = nowTick;
+    return sessions
+      .filter((session) => isUpcomingSession(session, nowMs))
+      .sort((a, b) => a.start.getTime() - b.start.getTime());
+  }, [isPublic, nowTick, sessions]);
+
   const upcomingSessionForPanel = isPublic
-    ? publicFeaturedSession
-    : nextUserSession;
+    ? null
+    : nextUpcomingUserSession;
 
   const handleCancelSession = useCallback(
     async (sessionId: string) => {
@@ -1023,10 +1117,10 @@ export default function LiveStreamStudioShell({
         }
         setNotice("Session cancelled.");
         if (selectedSessionId === sessionId) {
-          setSelectedSessionId(sessionId);
+          setSelectedSessionId(null);
         }
         unchangedPollCountRef.current = 0;
-        void refreshSessions();
+        void refreshSessions({ mode: "background" });
       } catch (err) {
         console.error(err);
         setNotice("Unable to cancel session.");
@@ -1116,7 +1210,10 @@ export default function LiveStreamStudioShell({
               }
               selectedSession={selectedSession}
               upcomingSession={upcomingSessionForPanel}
-              upcomingSessions={isPublic ? publicUpcomingSessions : []}
+              upcomingSessions={
+                isPublic ? publicUpcomingSessions : upcomingUserSessions
+              }
+              onSelectUpcomingSession={setSelectedSessionId}
               isPublic={isPublic}
               publicCtaLabel={publicJoinLabel}
               publicHelperText={publicJoinHelperText}

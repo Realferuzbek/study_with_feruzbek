@@ -31,6 +31,7 @@ type LiveStudioRightPanelProps = {
   isPublic?: boolean;
   publicCtaLabel?: string;
   publicHelperText?: string | null;
+  onSelectUpcomingSession?: (sessionId: string) => void;
   onPublicAction?: (intent: "join" | "cancel", sessionId: string) => void;
   pendingCancelSessionId?: string | null;
   onConfirmCancel?: (sessionId: string) => void;
@@ -91,6 +92,19 @@ function getSessionStatusMeta(status?: string | null) {
   };
 }
 
+type PanelActionState = {
+  label: string;
+  disabled: boolean;
+  state:
+    | "open"
+    | "closed"
+    | "full"
+    | "cancelled"
+    | "ended"
+    | "reserve_required"
+    | "unavailable";
+};
+
 export default function LiveStudioRightPanel({
   user,
   userId,
@@ -100,8 +114,9 @@ export default function LiveStudioRightPanel({
   upcomingSession,
   upcomingSessions = [],
   isPublic = false,
-  publicCtaLabel: _publicCtaLabel = "Continue",
+  publicCtaLabel: _publicCtaLabel = "Reserve spot",
   publicHelperText = null,
+  onSelectUpcomingSession,
   onPublicAction,
   pendingCancelSessionId = null,
   onConfirmCancel,
@@ -193,7 +208,7 @@ export default function LiveStudioRightPanel({
   const isJoinableStatus =
     normalizedStatus === "scheduled" || normalizedStatus === "active";
 
-  const joinState = useMemo(() => {
+  const joinState = useMemo<PanelActionState | null>(() => {
     if (!focusedSession || !joinWindow) return null;
     const status = (focusedSession.status ?? "scheduled").toLowerCase();
     if (status === "cancelled") {
@@ -214,6 +229,13 @@ export default function LiveStudioRightPanel({
     if (participantCount >= maxParticipants && !isHost && !isParticipant) {
       return { label: "Session full", disabled: true, state: "full" };
     }
+    if (!isPublic && !isHost && !isParticipant) {
+      return {
+        label: "Reserve a spot first",
+        disabled: true,
+        state: "reserve_required",
+      };
+    }
     if (now < joinWindow.joinOpenAt) {
       return {
         label: `Join opens at ${formatTimeCompact(joinWindow.joinOpenAt)}`,
@@ -229,7 +251,7 @@ export default function LiveStudioRightPanel({
       disabled: false,
       state: "open",
     };
-  }, [focusedSession, isHost, isParticipant, joinWindow, now]);
+  }, [focusedSession, isHost, isParticipant, isPublic, joinWindow, now]);
 
   const canCancel =
     isHost &&
@@ -265,8 +287,11 @@ export default function LiveStudioRightPanel({
 
   const reservationCutoff = useMemo(() => {
     if (!focusedSession) return null;
-    return new Date(focusedSession.start.getTime() - 10 * 60 * 1000);
+    return new Date(focusedSession.start.getTime() - 5 * 60 * 1000);
   }, [focusedSession]);
+  const isPastReservationCutoff =
+    Boolean(reservationCutoff) &&
+    now.getTime() >= (reservationCutoff?.getTime() ?? 0);
   const isAtCapacity =
     (focusedSession?.participantCount ?? 0) >=
     (focusedSession?.maxParticipants ?? 3);
@@ -276,21 +301,64 @@ export default function LiveStudioRightPanel({
     !isHost &&
     !isParticipant &&
     isJoinableStatus &&
-    !isAtCapacity;
+    !isAtCapacity &&
+    !isPastReservationCutoff;
   const canCancelReservation =
     !isPublic &&
     focusedSession?.myRole === "participant" &&
     !isHost &&
     isJoinableStatus &&
     Boolean(reservationCutoff) &&
-    now.getTime() < (reservationCutoff?.getTime() ?? 0);
+    !isPastReservationCutoff;
   const reservationChangesClosed =
     !isPublic &&
-    focusedSession?.myRole === "participant" &&
     !isHost &&
     isJoinableStatus &&
-    Boolean(reservationCutoff) &&
-    now.getTime() >= (reservationCutoff?.getTime() ?? 0);
+    isPastReservationCutoff;
+  const publicReserveState = useMemo<PanelActionState | null>(() => {
+    if (!isPublic || !focusedSession) return null;
+    const status = (focusedSession.status ?? "scheduled").toLowerCase();
+    if (status === "cancelled") {
+      return { label: "Reserve spot", disabled: true, state: "cancelled" };
+    }
+    if (status === "completed" || now.getTime() > focusedSession.end.getTime()) {
+      return { label: "Reserve spot", disabled: true, state: "ended" };
+    }
+    if (status !== "scheduled" && status !== "active") {
+      return { label: "Reserve spot", disabled: true, state: "unavailable" };
+    }
+    if (isAtCapacity) {
+      return { label: "Reserve spot", disabled: true, state: "full" };
+    }
+    if (isPastReservationCutoff) {
+      return { label: "Reserve spot", disabled: true, state: "closed" };
+    }
+    return { label: "Reserve spot", disabled: false, state: "open" };
+  }, [focusedSession, isAtCapacity, isPastReservationCutoff, isPublic, now]);
+  const primaryActionLabel = isPublic ? _publicCtaLabel : primaryJoinLabel;
+  const isPrimaryActionDisabled = isPublic
+    ? (publicReserveState?.disabled ?? true)
+    : (joinState?.disabled ?? true) || isJoining;
+  const primaryActionHint = useMemo(() => {
+    if (isPublic) {
+      if (publicReserveState?.state === "cancelled") return "Session cancelled.";
+      if (publicReserveState?.state === "ended") return "Session ended.";
+      if (publicReserveState?.state === "full") return "Session is full.";
+      if (publicReserveState?.state === "closed") {
+        return "Reservations close 5 minutes before start.";
+      }
+      if (publicReserveState?.state === "unavailable") {
+        return "Session unavailable.";
+      }
+      return publicHelperText;
+    }
+    if (joinState?.state !== "open") {
+      return joinState?.label ?? "Session unavailable.";
+    }
+    return null;
+  }, [isPublic, joinState, publicHelperText, publicReserveState]);
+  const shouldShowReservedBadge =
+    !isPublic && focusedSession?.myRole === "participant" && !isHost;
 
   const sharePath = focusedSession?.id
     ? `/feature/live?intent=join&sessionId=${encodeURIComponent(focusedSession.id)}`
@@ -419,67 +487,58 @@ export default function LiveStudioRightPanel({
         >
           <span className="flex items-center gap-2">
             <CalendarDays className="h-4 w-4 text-[var(--studio-muted)]" />
-            {isPublic ? "Upcoming Sessions" : "My Schedule"}
+            Upcoming Sessions
           </span>
           <ChevronRight className="h-4 w-4 text-[var(--studio-muted)]" />
         </button>
 
         {showSchedule ? (
           <div className="mt-3 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 py-3 text-sm text-[var(--studio-text)]">
-            {isPublic ? (
-              upcomingSessions.length > 0 ? (
-                <div className="flex flex-col gap-3">
-                  {upcomingSessions.map((session) => {
-                    const listTaskLabel =
-                      TASK_OPTIONS.find(
-                        (option) => option.value === session.task,
-                      )?.label ?? "Session";
-                    const listHostLabel =
-                      session.hostDisplayName ?? "Focus Host";
-                    return (
-                      <div
-                        key={session.id}
-                        className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-card)] px-3 py-2"
-                      >
-                        <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--studio-subtle)]">
-                          {formatDateLabel(session.start)}
-                        </span>
-                        <div className="mt-1 font-semibold">
-                          {formatTimeCompact(session.start)} -{" "}
-                          {formatTimeCompact(session.end)}
-                        </div>
-                        <div className="text-xs text-[var(--studio-muted)]">
-                          Task: {listTaskLabel}
-                        </div>
-                        <div className="text-xs text-[var(--studio-muted)]">
-                          Host: {listHostLabel}
-                        </div>
+            {upcomingSessions.length > 0 ? (
+              <div className="flex flex-col gap-3">
+                {upcomingSessions.map((session) => {
+                  const listTaskLabel =
+                    TASK_OPTIONS.find((option) => option.value === session.task)
+                      ?.label ?? "Session";
+                  const listHostLabel = session.hostDisplayName ?? "Focus Host";
+                  const isListSelected = focusedSession?.id === session.id;
+                  const canSelectUpcoming = Boolean(onSelectUpcomingSession);
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      onClick={() => onSelectUpcomingSession?.(session.id)}
+                      disabled={!canSelectUpcoming}
+                      className={`rounded-lg border px-3 py-2 text-left transition ${
+                        isListSelected
+                          ? "border-[var(--studio-accent)] bg-[var(--studio-accent-soft)]"
+                          : "border-[var(--studio-border)] bg-[var(--studio-card)]"
+                      } ${
+                        canSelectUpcoming
+                          ? "hover:-translate-y-0.5"
+                          : "cursor-default"
+                      }`}
+                    >
+                      <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--studio-subtle)]">
+                        {formatDateLabel(session.start)}
+                      </span>
+                      <div className="mt-1 font-semibold">
+                        {formatTimeCompact(session.start)} -{" "}
+                        {formatTimeCompact(session.end)}
                       </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="text-sm text-[var(--studio-muted)]">
-                  No upcoming sessions yet.
-                </p>
-              )
-            ) : focusedSession && scheduleLabel ? (
-              <div className="flex flex-col gap-1">
-                <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--studio-subtle)]">
-                  {scheduleLabel.dateLabel}
-                </span>
-                <span className="font-semibold">{scheduleLabel.timeLabel}</span>
-                <span className="text-xs text-[var(--studio-muted)]">
-                  Task: {taskLabel}
-                </span>
-                <span className="text-xs text-[var(--studio-muted)]">
-                  {focusedSession.participantCount ?? 0}/
-                  {focusedSession.maxParticipants ?? 3} participants
-                </span>
+                      <div className="text-xs text-[var(--studio-muted)]">
+                        Task: {listTaskLabel}
+                      </div>
+                      <div className="text-xs text-[var(--studio-muted)]">
+                        Host: {listHostLabel}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             ) : (
               <p className="text-sm text-[var(--studio-muted)]">
-                No sessions booked yet.
+                {isPublic ? "No upcoming sessions yet." : "No sessions booked yet."}
               </p>
             )}
           </div>
@@ -505,22 +564,6 @@ export default function LiveStudioRightPanel({
                 Retry
               </button>
             ) : null}
-          </div>
-        </div>
-      ) : null}
-
-      {!hasSelectedSession ? (
-        <div className="mb-4 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 py-3">
-          <div className="flex items-start gap-3">
-            <CalendarDays className="mt-0.5 h-4 w-4 text-[var(--studio-muted)]" />
-            <div>
-              <p className="text-sm font-semibold text-[var(--studio-text)]">
-                No booking selected
-              </p>
-              <p className="mt-1 text-xs text-[var(--studio-muted)]">
-                Select a booking or drag on the calendar to schedule.
-              </p>
-            </div>
           </div>
         </div>
       ) : null}
@@ -572,7 +615,7 @@ export default function LiveStudioRightPanel({
 
               <div className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-card)] px-3 py-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--studio-subtle)]">
-                  Join
+                  {isPublic ? "Reserve" : "Join"}
                 </p>
                 {isConfirmingCancel ? (
                   <div className="mt-2 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 py-3 text-sm text-[var(--studio-text)]">
@@ -602,9 +645,9 @@ export default function LiveStudioRightPanel({
                     <div className="mt-2 grid grid-cols-2 gap-2">
                       <button
                         type="button"
-                        disabled={(joinState?.disabled ?? true) || isJoining}
+                        disabled={isPrimaryActionDisabled}
                         onClick={() => {
-                          if (!focusedSession || joinState?.disabled) return;
+                          if (!focusedSession || isPrimaryActionDisabled) return;
                           if (isPublic) {
                             onPublicAction?.("join", focusedSession.id);
                             return;
@@ -612,12 +655,12 @@ export default function LiveStudioRightPanel({
                           onJoinSession(focusedSession);
                         }}
                         className={`h-11 rounded-xl text-sm font-semibold transition ${
-                          (joinState?.disabled ?? true) || isJoining
+                          isPrimaryActionDisabled
                             ? "cursor-not-allowed border border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)]"
                             : "bg-[var(--studio-accent)] text-white shadow-[0_12px_26px_rgba(91,92,226,0.32)] hover:-translate-y-0.5"
                         }`}
                       >
-                        {isJoining ? "Joining..." : primaryJoinLabel}
+                        {isJoining && !isPublic ? "Joining..." : primaryActionLabel}
                       </button>
                       <button
                         type="button"
@@ -647,9 +690,9 @@ export default function LiveStudioRightPanel({
                       </p>
                     ) : null}
 
-                    {joinState?.state !== "open" ? (
+                    {primaryActionHint ? (
                       <p className="mt-2 text-xs font-medium text-[var(--studio-muted)]">
-                        {joinState?.label ?? "Session unavailable."}
+                        {primaryActionHint}
                       </p>
                     ) : null}
 
@@ -685,9 +728,15 @@ export default function LiveStudioRightPanel({
                       )
                     ) : null}
 
+                    {shouldShowReservedBadge ? (
+                      <p className="mt-2 inline-flex items-center rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-600">
+                        Reserved
+                      </p>
+                    ) : null}
+
                     {reservationChangesClosed ? (
                       <p className="mt-2 text-xs font-medium text-[var(--studio-muted)]">
-                        Reservation changes close 10 minutes before start.
+                        Reservations close 5 minutes before start.
                       </p>
                     ) : null}
 
@@ -701,11 +750,6 @@ export default function LiveStudioRightPanel({
                       </p>
                     ) : null}
 
-                    {isPublic && publicHelperText ? (
-                      <p className="mt-2 text-xs font-medium text-[var(--studio-muted)]">
-                        {publicHelperText}
-                      </p>
-                    ) : null}
                   </>
                 )}
               </div>
@@ -726,7 +770,7 @@ export default function LiveStudioRightPanel({
                 No session selected
               </p>
               <p className="mt-1 text-xs text-[var(--studio-muted)]">
-                Select a booking or drag on the calendar to schedule.
+                Select a public session to see details.
               </p>
             </div>
           )}

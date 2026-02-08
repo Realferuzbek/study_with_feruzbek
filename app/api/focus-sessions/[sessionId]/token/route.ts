@@ -11,12 +11,6 @@ import {
   createHmsManagementToken,
   resolveHmsRole,
 } from "@/lib/voice/hms";
-import {
-  claimFocusSessionSeat,
-  isSeatClaimSuccess,
-  mapSeatClaimCodeToHttpStatus,
-  seatClaimMessage,
-} from "../../_sharedSeatClaim";
 
 type RouteContext = {
   params: { sessionId: string };
@@ -100,6 +94,44 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       { error: "Session is not available" },
       { status: 409 },
     );
+  }
+
+  const isHost = Boolean(focusSession.host_id && focusSession.host_id === user.id);
+  if (!isHost) {
+    const { data: participantRow, error: participantLookupError } = await sb
+      .from("focus_session_participants")
+      .select("role")
+      .eq("session_id", sessionId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (participantLookupError) {
+      console.error(
+        "[focus sessions] participant reservation lookup failed",
+        participantLookupError,
+      );
+      return NextResponse.json(
+        { error: "Failed to verify reservation" },
+        { status: 500 },
+      );
+    }
+
+    const reservationRole =
+      typeof participantRow?.role === "string"
+        ? participantRow.role.toLowerCase()
+        : null;
+    const hasParticipantReservation =
+      Boolean(participantRow) &&
+      (reservationRole === null || reservationRole === "participant");
+    if (!hasParticipantReservation) {
+      return NextResponse.json(
+        {
+          error:
+            "Reserve a spot first (reservations close 5 minutes before start).",
+        },
+        { status: 403 },
+      );
+    }
   }
 
   const now = new Date();
@@ -211,7 +243,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     );
   }
 
-  const isHost = Boolean(focusSession.host_id && focusSession.host_id === user.id);
   if (isHost) {
     const { error: hostRowError } = await sb
       .from("focus_session_participants")
@@ -225,27 +256,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
       return NextResponse.json(
         { error: "Failed to join session" },
         { status: 500 },
-      );
-    }
-  } else {
-    const { result: seatResult, error: seatError } = await claimFocusSessionSeat({
-      sessionId,
-      userId: user.id,
-      role: "participant",
-    });
-
-    if (seatError) {
-      console.error("[focus sessions] seat claim rpc failed", seatError);
-      return NextResponse.json(
-        { error: "Failed to join session" },
-        { status: 500 },
-      );
-    }
-
-    if (!isSeatClaimSuccess(seatResult.code)) {
-      return NextResponse.json(
-        { error: seatClaimMessage(seatResult.code), code: seatResult.code },
-        { status: mapSeatClaimCodeToHttpStatus(seatResult.code) },
       );
     }
   }

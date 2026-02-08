@@ -30,6 +30,49 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "sessionId is required" }, { status: 400 });
   }
 
+  const sb = supabaseAdmin();
+  const { data: focusSession, error: focusSessionError } = await sb
+    .from("focus_sessions")
+    .select("id, start_at, status")
+    .eq("id", sessionId)
+    .maybeSingle();
+
+  if (focusSessionError) {
+    console.error("[focus sessions] reserve lookup failed", focusSessionError);
+    return NextResponse.json(
+      { error: "Failed to load session." },
+      { status: 500 },
+    );
+  }
+
+  if (!focusSession) {
+    return NextResponse.json({ error: "Session not found." }, { status: 404 });
+  }
+
+  const sessionStatus = focusSession.status ?? "scheduled";
+  if (!isReservableStatus(sessionStatus)) {
+    return NextResponse.json(
+      { error: "Session is not available." },
+      { status: 409 },
+    );
+  }
+
+  const startsAt = new Date(focusSession.start_at);
+  if (Number.isNaN(startsAt.valueOf())) {
+    return NextResponse.json(
+      { error: "Session time is invalid." },
+      { status: 500 },
+    );
+  }
+
+  const cutoff = new Date(startsAt.getTime() - 5 * 60 * 1000);
+  if (Date.now() >= cutoff.getTime()) {
+    return NextResponse.json(
+      { error: "Reservations close 5 minutes before start." },
+      { status: 409 },
+    );
+  }
+
   const { result, error } = await claimFocusSessionSeat({
     sessionId,
     userId: user.id,
@@ -44,11 +87,11 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     );
   }
 
-  const status = mapSeatClaimCodeToHttpStatus(result.code);
-  if (status !== 200) {
+  const httpStatus = mapSeatClaimCodeToHttpStatus(result.code);
+  if (httpStatus !== 200) {
     return NextResponse.json(
       { error: seatClaimMessage(result.code), code: result.code },
-      { status },
+      { status: httpStatus },
     );
   }
 
@@ -114,10 +157,10 @@ export async function DELETE(_req: NextRequest, context: RouteContext) {
     );
   }
 
-  const cutoff = new Date(startsAt.getTime() - 10 * 60 * 1000);
+  const cutoff = new Date(startsAt.getTime() - 5 * 60 * 1000);
   if (Date.now() >= cutoff.getTime()) {
     return NextResponse.json(
-      { error: "Reservation changes close 10 minutes before start." },
+      { error: "Reservation changes close 5 minutes before start." },
       { status: 409 },
     );
   }
