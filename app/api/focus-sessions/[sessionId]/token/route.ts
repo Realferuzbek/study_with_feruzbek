@@ -186,7 +186,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     "FOCUS_SESSION_HOST_HMS_ROLE",
     process.env.FOCUS_SESSION_HOST_HMS_ROLE,
   );
-  if (hostRoleResult.error) {
+  if (hostRoleResult.error !== null) {
     return NextResponse.json({ error: hostRoleResult.error }, { status: 500 });
   }
 
@@ -194,7 +194,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     "FOCUS_SESSION_PARTICIPANT_HMS_ROLE",
     process.env.FOCUS_SESSION_PARTICIPANT_HMS_ROLE,
   );
-  if (participantRoleResult.error) {
+  if (participantRoleResult.error !== null) {
     return NextResponse.json(
       { error: participantRoleResult.error },
       { status: 500 },
