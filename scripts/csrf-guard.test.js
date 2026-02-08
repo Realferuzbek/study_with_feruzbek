@@ -1,11 +1,12 @@
 const assert = require("assert");
+const { loadTsModule } = require("./test-helpers/load-ts");
 
 const {
   requiresCsrfProtection,
   validateCsrfTokens,
   buildCsrfCookieOptions,
   buildSessionCookieOptions,
-} = require("../lib/csrf-guard");
+} = loadTsModule("lib/csrf-guard.ts");
 
 (function testRequiresCsrfProtection() {
   assert.strictEqual(

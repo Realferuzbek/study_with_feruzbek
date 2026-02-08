@@ -1,11 +1,11 @@
 // scripts/csrf.test.js
 const assert = require("assert");
+const { loadTsModule } = require("./test-helpers/load-ts");
 
-const MODULE_PATH = "../lib/csrf";
+const MODULE_PATH = "lib/csrf.ts";
 
 function loadCsrf() {
-  delete require.cache[require.resolve(MODULE_PATH)];
-  return require(MODULE_PATH);
+  return loadTsModule(MODULE_PATH);
 }
 
 const { generateCsrfToken, safeEqual, CSRF_COOKIE_NAME, CSRF_HEADER } =

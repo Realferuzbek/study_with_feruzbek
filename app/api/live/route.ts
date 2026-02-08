@@ -8,7 +8,7 @@ export async function GET() {
   const sb = supabaseAdmin();
   const { data } = await sb
     .from("live_status")
-    .select("*")
+    .select("state,scheduled_at")
     .eq("id", 1)
     .maybeSingle();
   const joinUrl = process.env.PUBLIC_TG_GROUP_LINK || "https://t.me/";

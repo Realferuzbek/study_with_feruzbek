@@ -91,6 +91,24 @@ function headersForResponse(context) {
   process.env.SECURITY_CSP_ENFORCE = "1";
 })();
 
+(function testMemoizedBuildOutputs() {
+  const contexts = [
+    { isProduction: false, isSecureTransport: false },
+    { isProduction: true, isSecureTransport: true },
+    { isProduction: true, isSecureTransport: true, allowIframe: true },
+  ];
+
+  for (const context of contexts) {
+    const cold = buildSecurityHeaders(context);
+    const warm = buildSecurityHeaders({ ...context });
+    assert.deepStrictEqual(
+      warm,
+      cold,
+      `memoized output must stay identical for ${JSON.stringify(context)}`,
+    );
+  }
+})();
+
 (function testIframeAllowanceKeepsCspButRemovesXfo() {
   const headers = buildSecurityHeaders({ allowIframe: true });
   assert(

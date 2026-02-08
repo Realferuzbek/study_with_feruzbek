@@ -15,7 +15,7 @@ TypeScript cannot find type definitions for 'jsonwebtoken', 'next', and 'node'.
 ✅ Removed restrictive `types` array from tsconfig.json
 ✅ Moved @types packages to devDependencies
 ✅ Updated Next.js config to disable Turbopack
-✅ Synchronized csrf.js and csrf.ts files
+✅ CSRF utilities are TypeScript-only (`lib/csrf*.ts`)
 
 ## Manual Fix Required
 
