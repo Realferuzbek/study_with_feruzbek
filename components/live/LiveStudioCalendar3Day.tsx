@@ -595,7 +595,7 @@ export default function LiveStudioCalendar3Day({
 
         <div
           ref={scrollRef}
-          className="relative grid max-h-[70vh] grid-cols-[var(--studio-time-gutter-width)_1fr] overflow-y-auto bg-[var(--studio-card)]"
+          className="relative grid max-h-[70vh] grid-cols-[var(--studio-time-gutter-width)_1fr] overflow-y-auto bg-[var(--studio-card)] [scrollbar-gutter:stable] [scrollbar-width:thin] [scrollbar-color:var(--studio-grid-strong)_transparent] dark:[color-scheme:dark] [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar]:w-2.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[var(--studio-grid-strong)] hover:[&::-webkit-scrollbar-thumb]:bg-[var(--studio-muted)]"
         >
           <div
             className="relative border-r border-[var(--studio-grid-strong)] bg-[var(--studio-panel)]"

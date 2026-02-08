@@ -416,7 +416,21 @@ export default function LiveStudioRightPanel({
             email={user?.email}
             size={40}
             alt="Profile avatar"
+            fallbackMode={!userId ? "brand" : "initial"}
           />
+
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)] transition hover:text-[var(--studio-text)]"
+            aria-label="Toggle theme"
+          >
+            {theme === "light" ? (
+              <Moon className="h-4 w-4" />
+            ) : (
+              <Sun className="h-4 w-4" />
+            )}
+          </button>
 
           <button
             type="button"
@@ -444,6 +458,7 @@ export default function LiveStudioRightPanel({
             email={user?.email}
             size={36}
             alt="Profile avatar"
+            fallbackMode={!userId ? "brand" : "initial"}
           />
           <div className="leading-snug">
             <p className="text-[14px] font-semibold text-[var(--studio-text)]">

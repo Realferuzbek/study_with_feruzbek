@@ -1134,7 +1134,7 @@ export default function LiveStreamStudioShell({
   return (
     <div
       className="min-h-[100dvh] bg-[var(--studio-bg)] text-[var(--studio-text)]"
-      style={themeVars as CSSProperties}
+      style={{ ...(themeVars as CSSProperties), colorScheme: theme }}
     >
       <div className="flex min-h-[100dvh] flex-col md:flex-row">
         <LiveStudioSidebar
@@ -1145,7 +1145,7 @@ export default function LiveStreamStudioShell({
           }}
         />
 
-        <main className="flex-1 px-4 py-6 md:px-6 md:py-8">
+        <main className="flex-1 px-4 pt-3 pb-6 md:px-6 md:pt-4 md:pb-8">
           <div
             className="grid gap-4 transition-[grid-template-columns] duration-300 lg:grid-cols-[320px_minmax(0,1fr)_var(--live-right-width)] xl:grid-cols-[320px_minmax(0,1fr)_var(--live-right-width-xl)]"
             style={

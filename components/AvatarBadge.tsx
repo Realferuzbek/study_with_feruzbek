@@ -10,6 +10,7 @@ type AvatarBadgeProps = {
   className?: string;
   priority?: boolean;
   alt?: string;
+  fallbackMode?: "initial" | "brand";
 };
 
 function cx(...classes: Array<string | undefined | false>) {
@@ -24,10 +25,12 @@ export default function AvatarBadge({
   className,
   priority = false,
   alt = "User avatar",
+  fallbackMode = "initial",
 }: AvatarBadgeProps) {
   const { initial } = getAvatarVisuals({ name, email });
 
   const fontSize = Math.max(16, Math.round(size * 0.45));
+  const logoSize = Math.max(16, Math.round(size * 0.58));
   const containerStyle: CSSProperties = {
     width: size,
     height: size,
@@ -37,6 +40,12 @@ export default function AvatarBadge({
     backgroundColor: "rgba(10, 10, 18, 0.85)",
     backgroundImage:
       "radial-gradient(circle at 32% 22%, rgba(255,255,255,0.35), rgba(255,255,255,0) 48%)",
+  };
+
+  const brandSurface: CSSProperties = {
+    backgroundColor: "rgba(255, 255, 255, 0.95)",
+    backgroundImage:
+      "radial-gradient(circle at 32% 22%, rgba(255,255,255,0.92), rgba(241,245,249,0.88) 52%, rgba(226,232,240,0.88))",
   };
 
   return (
@@ -56,6 +65,20 @@ export default function AvatarBadge({
           priority={priority}
           className="object-cover"
         />
+      ) : fallbackMode === "brand" ? (
+        <div
+          className="flex h-full w-full items-center justify-center"
+          style={brandSurface}
+        >
+          <Image
+            src="/logo.svg"
+            alt="StudyMate"
+            width={logoSize}
+            height={logoSize}
+            priority={priority}
+            className="object-contain"
+          />
+        </div>
       ) : (
         <div
           className="flex h-full w-full items-center justify-center text-white"
