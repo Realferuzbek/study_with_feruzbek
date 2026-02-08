@@ -27,6 +27,8 @@ export type StudioBooking = {
   roomId?: string | null;
   participantCount?: number;
   maxParticipants?: number;
+  isParticipant?: boolean;
+  myRole?: string | null;
   status?: StudioBookingStatus | string;
   isOptimistic?: boolean;
 };
@@ -694,6 +696,8 @@ export default function LiveStudioCalendar3Day({
                     totalSlots={totalSlots}
                     participantCount={bookingItem.participantCount}
                     maxParticipants={bookingItem.maxParticipants}
+                    isParticipant={bookingItem.isParticipant}
+                    myRole={bookingItem.myRole}
                     status={bookingItem.status}
                     isOptimistic={bookingItem.isOptimistic}
                     isHost={Boolean(
@@ -767,6 +771,8 @@ type CalendarBlockProps = {
   isSelected?: boolean;
   participantCount?: number;
   maxParticipants?: number;
+  isParticipant?: boolean;
+  myRole?: string | null;
   onSelect?: () => void;
 };
 
@@ -785,6 +791,8 @@ function CalendarBlock({
   isSelected = false,
   participantCount,
   maxParticipants,
+  isParticipant = false,
+  myRole = null,
   onSelect,
 }: CalendarBlockProps) {
   const taskOption = TASK_OPTIONS.find((option) => option.value === task);
@@ -884,6 +892,11 @@ function CalendarBlock({
       typeof maxParticipants === "number" ? (
         <div className="mt-1 text-[10px] font-semibold text-[var(--studio-booking-muted)]">
           {participantCount}/{maxParticipants} participants
+        </div>
+      ) : null}
+      {isParticipant && myRole === "participant" ? (
+        <div className="mt-1 inline-flex w-fit rounded-full border border-[var(--studio-accent)] bg-[var(--studio-card)] px-2 py-0.5 text-[10px] font-semibold text-[var(--studio-accent-ink)]">
+          Reserved
         </div>
       ) : null}
       {statusLabel ? (

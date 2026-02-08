@@ -62,6 +62,8 @@ type FocusSessionApi = {
   participant_count?: number | null;
   max_participants?: number | null;
   room_id?: string | null;
+  is_participant?: boolean | null;
+  my_role?: string | null;
 };
 
 function startOfDay(date: Date) {
@@ -120,18 +122,24 @@ function toStudioBooking(session: FocusSessionApi): StudioBooking | null {
     hostDisplayName: session.host_display_name ?? null,
     participantCount: session.participant_count ?? 0,
     maxParticipants: session.max_participants ?? 3,
+    isParticipant: session.is_participant ?? false,
+    myRole: session.my_role ?? null,
     status: session.status ?? "scheduled",
     roomId: session.room_id ?? null,
   };
 }
 
-function canAutoJoin(session: StudioBooking) {
-  if (session.status !== "scheduled") {
+function canAutoJoin(session: StudioBooking, currentUserId?: string | null) {
+  if (session.status !== "scheduled" && session.status !== "active") {
     return false;
   }
   const maxParticipants = session.maxParticipants ?? 3;
   const participantCount = session.participantCount ?? 0;
-  if (participantCount >= maxParticipants) {
+  const isHost = Boolean(
+    session.hostId && currentUserId && session.hostId === currentUserId,
+  );
+  const isParticipant = session.isParticipant === true;
+  if (participantCount >= maxParticipants && !isHost && !isParticipant) {
     return false;
   }
   const now = Date.now();
@@ -151,6 +159,8 @@ function buildSessionSignature(session: StudioBooking) {
     session.hostDisplayName ?? "",
     session.participantCount ?? 0,
     session.maxParticipants ?? 0,
+    session.isParticipant ? 1 : 0,
+    session.myRole ?? "",
     session.roomId ?? "",
   ].join(":");
 }
@@ -193,6 +203,11 @@ export default function LiveStreamStudioShell({
     useState<StudioSelectionRange | null>(null);
   const [isRightPanelCollapsed, setIsRightPanelCollapsed] = useState(false);
   const [joiningSessionId, setJoiningSessionId] = useState<string | null>(null);
+  const [reservingSessionId, setReservingSessionId] = useState<string | null>(
+    null,
+  );
+  const [cancellingReservationSessionId, setCancellingReservationSessionId] =
+    useState<string | null>(null);
   const [pendingCancelSessionId, setPendingCancelSessionId] = useState<
     string | null
   >(null);
@@ -562,6 +577,24 @@ export default function LiveStreamStudioShell({
     }
   }, [pendingCancelSessionId, sessions]);
 
+  useEffect(() => {
+    if (!reservingSessionId) return;
+    const stillExists = sessions.some((session) => session.id === reservingSessionId);
+    if (!stillExists) {
+      setReservingSessionId(null);
+    }
+  }, [reservingSessionId, sessions]);
+
+  useEffect(() => {
+    if (!cancellingReservationSessionId) return;
+    const stillExists = sessions.some(
+      (session) => session.id === cancellingReservationSessionId,
+    );
+    if (!stillExists) {
+      setCancellingReservationSessionId(null);
+    }
+  }, [cancellingReservationSessionId, sessions]);
+
   const handleBookClick = useCallback(() => {
     if (!user?.id) {
       redirectToSignin("book");
@@ -647,6 +680,129 @@ export default function LiveStreamStudioShell({
     [joiningSessionId, redirectToSignin, router, user?.id],
   );
 
+  const handleReserveSession = useCallback(
+    async (session: StudioBooking) => {
+      if (!session?.id) return;
+      if (!user?.id) {
+        redirectToSignin("join", session.id);
+        return;
+      }
+      if (reservingSessionId && reservingSessionId !== session.id) return;
+      setReservingSessionId(session.id);
+      setNotice("Reserving spot...");
+      try {
+        const res = await csrfFetch(`/api/focus-sessions/${session.id}/reserve`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        const text = await res.text().catch(() => "");
+        if (!res.ok) {
+          const payload = text
+            ? (() => {
+                try {
+                  return JSON.parse(text);
+                } catch {
+                  return null;
+                }
+              })()
+            : null;
+          const message = payload?.error ?? "Unable to reserve spot.";
+          console.error("[focus sessions] reserve failed", res.status, text);
+          setNotice(message);
+          return;
+        }
+        const payload = text
+          ? (() => {
+              try {
+                return JSON.parse(text);
+              } catch {
+                return null;
+              }
+            })()
+          : null;
+        if (payload?.status === "already_participant") {
+          setNotice("You're already reserved for this session.");
+        } else {
+          setNotice("Spot reserved.");
+        }
+        unchangedPollCountRef.current = 0;
+        void refreshSessions();
+      } catch (err) {
+        console.error(err);
+        setNotice("Unable to reserve spot.");
+      } finally {
+        setReservingSessionId(null);
+      }
+    },
+    [redirectToSignin, refreshSessions, reservingSessionId, user?.id],
+  );
+
+  const handleCancelReservation = useCallback(
+    async (session: StudioBooking) => {
+      if (!session?.id) return;
+      if (!user?.id) {
+        redirectToSignin("join", session.id);
+        return;
+      }
+      if (
+        cancellingReservationSessionId &&
+        cancellingReservationSessionId !== session.id
+      ) {
+        return;
+      }
+      setCancellingReservationSessionId(session.id);
+      setNotice("Cancelling reservation...");
+      try {
+        const res = await csrfFetch(`/api/focus-sessions/${session.id}/reserve`, {
+          method: "DELETE",
+        });
+        const text = await res.text().catch(() => "");
+        if (!res.ok) {
+          const payload = text
+            ? (() => {
+                try {
+                  return JSON.parse(text);
+                } catch {
+                  return null;
+                }
+              })()
+            : null;
+          const message = payload?.error ?? "Unable to cancel reservation.";
+          console.error(
+            "[focus sessions] cancel reservation failed",
+            res.status,
+            text,
+          );
+          setNotice(message);
+          return;
+        }
+        const payload = text
+          ? (() => {
+              try {
+                return JSON.parse(text);
+              } catch {
+                return null;
+              }
+            })()
+          : null;
+        if (payload?.status === "not_reserved") {
+          setNotice("Reservation already cleared.");
+        } else {
+          setNotice("Reservation cancelled.");
+        }
+        unchangedPollCountRef.current = 0;
+        void refreshSessions();
+      } catch (err) {
+        console.error(err);
+        setNotice("Unable to cancel reservation.");
+      } finally {
+        setCancellingReservationSessionId(null);
+      }
+    },
+    [cancellingReservationSessionId, redirectToSignin, refreshSessions, user?.id],
+  );
+
   useEffect(() => {
     if (!intent || !user?.id) return;
     const key = `${intent}:${intentSessionId ?? ""}`;
@@ -671,7 +827,7 @@ export default function LiveStreamStudioShell({
     setSelectedSessionId(targetSession.id);
 
     if (intent === "join") {
-      if (canAutoJoin(targetSession)) {
+      if (canAutoJoin(targetSession, user?.id ?? null)) {
         handleJoinSession(targetSession);
       }
     } else if (intent === "cancel") {
@@ -971,8 +1127,12 @@ export default function LiveStreamStudioShell({
               onConfirmCancel={(sessionId) => handleCancelSession(sessionId)}
               onDismissCancel={() => setPendingCancelSessionId(null)}
               onCancelSession={handleCancelSession}
+              onReserveSession={handleReserveSession}
+              onCancelReservation={handleCancelReservation}
               onJoinSession={handleJoinSession}
               joiningSessionId={joiningSessionId}
+              reservingSessionId={reservingSessionId}
+              cancellingReservationSessionId={cancellingReservationSessionId}
               userId={user?.id ?? null}
               collapsed={isRightPanelCollapsed}
               onCollapseChange={setIsRightPanelCollapsed}

@@ -5,11 +5,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/supabaseServer";
 import {
+  type HmsRole,
   buildHmsRoomName,
   createHmsAuthToken,
   createHmsManagementToken,
-  getDefaultHmsRole,
+  resolveHmsRole,
 } from "@/lib/voice/hms";
+import {
+  claimFocusSessionSeat,
+  isSeatClaimSuccess,
+  mapSeatClaimCodeToHttpStatus,
+  seatClaimMessage,
+} from "../../_sharedSeatClaim";
 
 type RouteContext = {
   params: { sessionId: string };
@@ -25,6 +32,18 @@ type FocusSessionRow = {
   max_participants?: number | null;
   host_id?: string | null;
 };
+
+function isJoinableStatus(status: string | null | undefined) {
+  return status === "scheduled" || status === "active";
+}
+
+function resolvePublishableRole(
+  value: string | undefined,
+  fallback: "host" | "peer",
+): HmsRole {
+  const resolved = resolveHmsRole(value ?? fallback);
+  return resolved === "viewer" ? fallback : resolved;
+}
 
 export async function POST(_req: NextRequest, context: RouteContext) {
   const session = await auth();
@@ -60,7 +79,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
   }
 
   const focusSession = data as FocusSessionRow;
-
   const startsAt = new Date(focusSession.start_at);
   const endsAt = focusSession.end_at
     ? new Date(focusSession.end_at)
@@ -76,8 +94,8 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     );
   }
 
-  const status = focusSession.status ?? "scheduled";
-  if (status !== "scheduled") {
+  const status = (focusSession.status ?? "scheduled").toLowerCase();
+  if (!isJoinableStatus(status)) {
     return NextResponse.json(
       { error: "Session is not available" },
       { status: 409 },
@@ -86,7 +104,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
 
   const now = new Date();
   const joinOpenAt = new Date(startsAt.getTime() - 10 * 60 * 1000);
-
   if (now < joinOpenAt) {
     return NextResponse.json(
       { error: "Join window has not opened yet" },
@@ -101,138 +118,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     );
   }
 
-  const overlapFilter = {
-    start: startsAt.toISOString(),
-    end: endsAt.toISOString(),
-  };
-  const nowIso = now.toISOString();
-
-  const { data: hostActive, error: hostActiveError } = await sb
-    .from("focus_sessions")
-    .select("id")
-    .eq("host_id", user.id)
-    .neq("id", sessionId)
-    .lte("start_at", nowIso)
-    .gt("end_at", nowIso)
-    .in("status", ["scheduled", "active"])
-    .limit(1);
-
-  if (hostActiveError) {
-    console.error("[focus sessions] active check failed", hostActiveError);
-    return NextResponse.json(
-      { error: "Failed to validate session" },
-      { status: 500 },
-    );
-  }
-
-  if ((hostActive ?? []).length > 0) {
-    return NextResponse.json(
-      { error: "You already have an active session." },
-      { status: 409 },
-    );
-  }
-
-  const { data: hostOverlap, error: hostOverlapError } = await sb
-    .from("focus_sessions")
-    .select("id")
-    .eq("host_id", user.id)
-    .neq("id", sessionId)
-    .lt("start_at", overlapFilter.end)
-    .gt("end_at", overlapFilter.start)
-    .in("status", ["scheduled", "active"])
-    .limit(1);
-
-  if (hostOverlapError) {
-    console.error("[focus sessions] overlap check failed", hostOverlapError);
-    return NextResponse.json(
-      { error: "Failed to validate session" },
-      { status: 500 },
-    );
-  }
-
-  if ((hostOverlap ?? []).length > 0) {
-    return NextResponse.json(
-      { error: "You already have another session at this time." },
-      { status: 409 },
-    );
-  }
-
-  const { data: participantRows, error: participantLookupError } = await sb
-    .from("focus_session_participants")
-    .select("session_id")
-    .eq("user_id", user.id);
-
-  if (participantLookupError) {
-    console.error("[focus sessions] participant lookup failed", participantLookupError);
-    return NextResponse.json(
-      { error: "Failed to validate session" },
-      { status: 500 },
-    );
-  }
-
-  const participantSessionIds =
-    participantRows?.map((row) => row.session_id) ?? [];
-  const isAlreadyParticipant = participantSessionIds.includes(sessionId);
-  const otherParticipantIds = participantSessionIds.filter(
-    (id) => id !== sessionId,
-  );
-
-  if (otherParticipantIds.length > 0) {
-    const { data: participantActive, error: participantActiveError } = await sb
-      .from("focus_sessions")
-      .select("id")
-      .in("id", otherParticipantIds)
-      .lte("start_at", nowIso)
-      .gt("end_at", nowIso)
-      .in("status", ["scheduled", "active"])
-      .limit(1);
-
-    if (participantActiveError) {
-      console.error(
-        "[focus sessions] participant active check failed",
-        participantActiveError,
-      );
-      return NextResponse.json(
-        { error: "Failed to validate session" },
-        { status: 500 },
-      );
-    }
-
-    if ((participantActive ?? []).length > 0) {
-      return NextResponse.json(
-        { error: "You already have an active session." },
-        { status: 409 },
-      );
-    }
-
-    const { data: participantOverlap, error: participantOverlapError } = await sb
-      .from("focus_sessions")
-      .select("id")
-      .in("id", otherParticipantIds)
-      .lt("start_at", overlapFilter.end)
-      .gt("end_at", overlapFilter.start)
-      .in("status", ["scheduled", "active"])
-      .limit(1);
-
-    if (participantOverlapError) {
-      console.error(
-        "[focus sessions] participant overlap failed",
-        participantOverlapError,
-      );
-      return NextResponse.json(
-        { error: "Failed to validate session" },
-        { status: 500 },
-      );
-    }
-
-    if ((participantOverlap ?? []).length > 0) {
-      return NextResponse.json(
-        { error: "You already have another session at this time." },
-        { status: 409 },
-      );
-    }
-  }
-
   const accessKey = process.env.HMS_APP_ACCESS_KEY;
   const secret = process.env.HMS_APP_SECRET;
   if (!accessKey || !secret) {
@@ -243,7 +128,6 @@ export async function POST(_req: NextRequest, context: RouteContext) {
   }
 
   let roomId = focusSession.room_id ?? null;
-
   if (!roomId) {
     const roomName = buildHmsRoomName("focus-session", focusSession.id);
     const managementToken = createHmsManagementToken(accessKey, secret);
@@ -327,45 +211,55 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     );
   }
 
-  if (!isAlreadyParticipant) {
-    const maxParticipants = focusSession.max_participants ?? 3;
-    const { count, error: countError } = await sb
-      .from("focus_session_participants")
-      .select("id", { count: "exact", head: true })
-      .eq("session_id", sessionId);
-
-    if (countError) {
-      console.error("[focus sessions] participant count failed", countError);
-      return NextResponse.json(
-        { error: "Failed to join session" },
-        { status: 500 },
-      );
-    }
-
-    if ((count ?? 0) >= maxParticipants) {
-      return NextResponse.json(
-        { error: "Session is full" },
-        { status: 409 },
-      );
-    }
-
-    const { error: insertError } = await sb
+  const isHost = Boolean(focusSession.host_id && focusSession.host_id === user.id);
+  if (isHost) {
+    const { error: hostRowError } = await sb
       .from("focus_session_participants")
       .upsert(
-        { session_id: sessionId, user_id: user.id },
+        { session_id: sessionId, user_id: user.id, role: "host" },
         { onConflict: "session_id,user_id" },
       );
 
-    if (insertError) {
-      console.error("[focus sessions] participant insert failed", insertError);
+    if (hostRowError) {
+      console.error("[focus sessions] host participant upsert failed", hostRowError);
       return NextResponse.json(
         { error: "Failed to join session" },
         { status: 500 },
+      );
+    }
+  } else {
+    const { result: seatResult, error: seatError } = await claimFocusSessionSeat({
+      sessionId,
+      userId: user.id,
+      role: "participant",
+    });
+
+    if (seatError) {
+      console.error("[focus sessions] seat claim rpc failed", seatError);
+      return NextResponse.json(
+        { error: "Failed to join session" },
+        { status: 500 },
+      );
+    }
+
+    if (!isSeatClaimSuccess(seatResult.code)) {
+      return NextResponse.json(
+        { error: seatClaimMessage(seatResult.code), code: seatResult.code },
+        { status: mapSeatClaimCodeToHttpStatus(seatResult.code) },
       );
     }
   }
 
-  const role = getDefaultHmsRole();
+  const hostRole = resolvePublishableRole(
+    process.env.FOCUS_SESSION_HOST_HMS_ROLE,
+    "host",
+  );
+  const participantRole = resolvePublishableRole(
+    process.env.FOCUS_SESSION_PARTICIPANT_HMS_ROLE,
+    "peer",
+  );
+  const role = isHost ? hostRole : participantRole;
+
   const token = createHmsAuthToken({
     accessKey,
     secret,

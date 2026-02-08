@@ -36,8 +36,12 @@ type LiveStudioRightPanelProps = {
   onConfirmCancel?: (sessionId: string) => void;
   onDismissCancel?: () => void;
   onCancelSession: (sessionId: string) => void;
+  onReserveSession: (session: StudioBooking) => void;
+  onCancelReservation: (session: StudioBooking) => void;
   onJoinSession: (session: StudioBooking) => void;
   joiningSessionId?: string | null;
+  reservingSessionId?: string | null;
+  cancellingReservationSessionId?: string | null;
   collapsed: boolean;
   onCollapseChange: (next: boolean) => void;
   isLoading?: boolean;
@@ -103,8 +107,12 @@ export default function LiveStudioRightPanel({
   onConfirmCancel,
   onDismissCancel,
   onCancelSession,
+  onReserveSession,
+  onCancelReservation,
   onJoinSession,
   joiningSessionId,
+  reservingSessionId = null,
+  cancellingReservationSessionId = null,
   collapsed,
   onCollapseChange,
   isLoading = false,
@@ -178,16 +186,23 @@ export default function LiveStudioRightPanel({
   const isHost = Boolean(
     focusedSession?.hostId && userId && focusedSession.hostId === userId,
   );
+  const isParticipant = Boolean(
+    focusedSession?.isParticipant || focusedSession?.myRole === "participant",
+  );
+  const normalizedStatus = (focusedSession?.status ?? "scheduled").toLowerCase();
+  const isJoinableStatus =
+    normalizedStatus === "scheduled" || normalizedStatus === "active";
 
   const joinState = useMemo(() => {
     if (!focusedSession || !joinWindow) return null;
-    if (focusedSession.status === "cancelled") {
+    const status = (focusedSession.status ?? "scheduled").toLowerCase();
+    if (status === "cancelled") {
       return { label: "Session cancelled", disabled: true, state: "cancelled" };
     }
-    if (focusedSession.status === "completed") {
+    if (status === "completed") {
       return { label: "Session ended", disabled: true, state: "ended" };
     }
-    if (focusedSession.status && focusedSession.status !== "scheduled") {
+    if (status !== "scheduled" && status !== "active") {
       return {
         label: "Session unavailable",
         disabled: true,
@@ -196,7 +211,7 @@ export default function LiveStudioRightPanel({
     }
     const maxParticipants = focusedSession.maxParticipants ?? 3;
     const participantCount = focusedSession.participantCount ?? 0;
-    if (participantCount >= maxParticipants) {
+    if (participantCount >= maxParticipants && !isHost && !isParticipant) {
       return { label: "Session full", disabled: true, state: "full" };
     }
     if (now < joinWindow.joinOpenAt) {
@@ -209,8 +224,12 @@ export default function LiveStudioRightPanel({
     if (now > joinWindow.joinCloseAt) {
       return { label: "Session ended", disabled: true, state: "ended" };
     }
-    return { label: "Join session", disabled: false, state: "open" };
-  }, [focusedSession, joinWindow, now]);
+    return {
+      label: status === "active" ? "Rejoin session" : "Join session",
+      disabled: false,
+      state: "open",
+    };
+  }, [focusedSession, isHost, isParticipant, joinWindow, now]);
 
   const canCancel =
     isHost &&
@@ -219,6 +238,13 @@ export default function LiveStudioRightPanel({
 
   const isJoining = Boolean(
     focusedSession?.id && joiningSessionId === focusedSession.id,
+  );
+  const isReserving = Boolean(
+    focusedSession?.id && reservingSessionId === focusedSession.id,
+  );
+  const isCancellingReservation = Boolean(
+    focusedSession?.id &&
+      cancellingReservationSessionId === focusedSession.id,
   );
 
   const isConfirmingCancel = Boolean(
@@ -229,10 +255,42 @@ export default function LiveStudioRightPanel({
     isLoading && !focusedSession && upcomingSessions.length === 0;
 
   const statusMeta = getSessionStatusMeta(focusedSession?.status ?? null);
-  const primaryJoinLabel =
-    isHost && focusedSession?.status === "scheduled"
-      ? "Start session"
-      : "Join session";
+  const primaryJoinLabel = useMemo(() => {
+    if (!focusedSession) return "Join session";
+    const status = (focusedSession.status ?? "scheduled").toLowerCase();
+    if (isHost && status === "scheduled") return "Start session";
+    if (status === "active") return "Rejoin session";
+    return "Join session";
+  }, [focusedSession, isHost]);
+
+  const reservationCutoff = useMemo(() => {
+    if (!focusedSession) return null;
+    return new Date(focusedSession.start.getTime() - 10 * 60 * 1000);
+  }, [focusedSession]);
+  const isAtCapacity =
+    (focusedSession?.participantCount ?? 0) >=
+    (focusedSession?.maxParticipants ?? 3);
+  const canReserveSpot =
+    !isPublic &&
+    Boolean(focusedSession) &&
+    !isHost &&
+    !isParticipant &&
+    isJoinableStatus &&
+    !isAtCapacity;
+  const canCancelReservation =
+    !isPublic &&
+    focusedSession?.myRole === "participant" &&
+    !isHost &&
+    isJoinableStatus &&
+    Boolean(reservationCutoff) &&
+    now.getTime() < (reservationCutoff?.getTime() ?? 0);
+  const reservationChangesClosed =
+    !isPublic &&
+    focusedSession?.myRole === "participant" &&
+    !isHost &&
+    isJoinableStatus &&
+    Boolean(reservationCutoff) &&
+    now.getTime() >= (reservationCutoff?.getTime() ?? 0);
 
   const sharePath = focusedSession?.id
     ? `/feature/live?intent=join&sessionId=${encodeURIComponent(focusedSession.id)}`
@@ -592,6 +650,54 @@ export default function LiveStudioRightPanel({
                     {joinState?.state !== "open" ? (
                       <p className="mt-2 text-xs font-medium text-[var(--studio-muted)]">
                         {joinState?.label ?? "Session unavailable."}
+                      </p>
+                    ) : null}
+
+                    {!isPublic && focusedSession && !isHost ? (
+                      focusedSession.myRole === "participant" ? (
+                        <button
+                          type="button"
+                          onClick={() => onCancelReservation(focusedSession)}
+                          disabled={!canCancelReservation || isCancellingReservation}
+                          className={`mt-3 h-10 w-full rounded-xl border text-sm font-semibold transition ${
+                            !canCancelReservation || isCancellingReservation
+                              ? "cursor-not-allowed border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)]"
+                              : "border-amber-500/40 bg-amber-500/10 text-amber-600 hover:-translate-y-0.5"
+                          }`}
+                        >
+                          {isCancellingReservation
+                            ? "Cancelling..."
+                            : "Cancel reservation"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onReserveSession(focusedSession)}
+                          disabled={!canReserveSpot || isReserving}
+                          className={`mt-3 h-10 w-full rounded-xl border text-sm font-semibold transition ${
+                            !canReserveSpot || isReserving
+                              ? "cursor-not-allowed border-[var(--studio-border)] bg-[var(--studio-panel)] text-[var(--studio-muted)]"
+                              : "border-[var(--studio-accent)] bg-[var(--studio-accent-soft)] text-[var(--studio-accent-ink)] hover:-translate-y-0.5"
+                          }`}
+                        >
+                          {isReserving ? "Reserving..." : "Reserve spot"}
+                        </button>
+                      )
+                    ) : null}
+
+                    {reservationChangesClosed ? (
+                      <p className="mt-2 text-xs font-medium text-[var(--studio-muted)]">
+                        Reservation changes close 10 minutes before start.
+                      </p>
+                    ) : null}
+
+                    {!isPublic &&
+                    focusedSession &&
+                    !isHost &&
+                    focusedSession.myRole !== "participant" &&
+                    isAtCapacity ? (
+                      <p className="mt-2 text-xs font-medium text-[var(--studio-muted)]">
+                        Session is full.
                       </p>
                     ) : null}
 

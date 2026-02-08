@@ -29,6 +29,8 @@ type FocusSessionListItem = {
   participant_count: number;
   max_participants: number;
   room_id: string | null;
+  is_participant: boolean;
+  my_role: "host" | "participant" | null;
 };
 
 type FocusSessionsResponseBody = {
@@ -130,6 +132,31 @@ function computeEndsAt(startsAt: Date, durationMinutes: number) {
   return new Date(startsAt.getTime() + durationMinutes * 60_000);
 }
 
+async function cleanupHmsRoom(
+  roomId: string,
+  accessKey: string,
+  secret: string,
+) {
+  try {
+    const managementToken = createHmsManagementToken(accessKey, secret);
+    const response = await fetch(
+      `https://api.100ms.live/v2/rooms/${encodeURIComponent(roomId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${managementToken}`,
+        },
+      },
+    );
+    if (!response.ok && response.status !== 404) {
+      const detail = await response.text().catch(() => "");
+      console.error("[focus sessions] cleanup room delete failed", detail);
+    }
+  } catch (error) {
+    console.error("[focus sessions] cleanup room delete errored", error);
+  }
+}
+
 function buildFocusSessionsEtag(serializedPayload: string) {
   const digest = createHash("sha1").update(serializedPayload).digest("base64url");
   return `"${digest}"`;
@@ -160,8 +187,8 @@ function buildTooManyRequestsResponse(resetAt: number) {
   );
 }
 
-function buildResponseCacheKey(from: Date, to: Date) {
-  return `${from.toISOString()}|${to.toISOString()}`;
+function buildResponseCacheKey(userId: string, from: Date, to: Date) {
+  return `${userId}|${from.toISOString()}|${to.toISOString()}`;
 }
 
 function readFocusSessionsCache(key: string, now: number) {
@@ -278,7 +305,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const responseCacheKey = buildResponseCacheKey(from, to);
+  const responseCacheKey = buildResponseCacheKey(user.id, from, to);
   const cachedResponse = readFocusSessionsCache(responseCacheKey, Date.now());
   if (cachedResponse) {
     return buildFocusSessionsGetResponse(
@@ -310,6 +337,7 @@ export async function GET(req: NextRequest) {
   const sessions = data ?? [];
   const sessionIds = sessions.map((row) => row.id);
   const participantCounts = new Map<string, number>();
+  const myParticipantRoles = new Map<string, "host" | "participant">();
 
   if (sessionIds.length > 0) {
     const { data: participants, error: participantError } = await sb
@@ -328,6 +356,30 @@ export async function GET(req: NextRequest) {
     participants?.forEach((row) => {
       const current = participantCounts.get(row.session_id) ?? 0;
       participantCounts.set(row.session_id, current + 1);
+    });
+
+    const { data: myRows, error: myRowsError } = await sb
+      .from("focus_session_participants")
+      .select("session_id, role")
+      .eq("user_id", user.id)
+      .in("session_id", sessionIds);
+
+    if (myRowsError) {
+      console.error("[focus sessions] my participant lookup failed", myRowsError);
+      return NextResponse.json(
+        { error: "Failed to load sessions" },
+        { status: 500 },
+      );
+    }
+
+    myRows?.forEach((row) => {
+      const normalizedRole =
+        typeof row.role === "string" ? row.role.toLowerCase() : "participant";
+      if (normalizedRole === "host" || normalizedRole === "participant") {
+        myParticipantRoles.set(row.session_id, normalizedRole);
+      } else {
+        myParticipantRoles.set(row.session_id, "participant");
+      }
     });
   }
 
@@ -382,6 +434,8 @@ export async function GET(req: NextRequest) {
       const hostProfile = hostMap.get(row.host_id ?? "") ?? null;
       const hostDisplayName =
         hostProfile?.display_name ?? hostProfile?.name ?? "Focus Host";
+      const isHost = Boolean(row.host_id && row.host_id === user.id);
+      const myRole = myParticipantRoles.get(row.id) ?? (isHost ? "host" : null);
       return {
         id: row.id,
         task: row.task ?? "desk",
@@ -393,6 +447,8 @@ export async function GET(req: NextRequest) {
         participant_count: participantCounts.get(row.id) ?? 0,
         max_participants: row.max_participants ?? MAX_PARTICIPANTS,
         room_id: row.room_id ?? null,
+        is_participant: myRole !== null,
+        my_role: myRole,
       };
     })
     .filter((row): row is FocusSessionListItem => Boolean(row));
@@ -602,6 +658,7 @@ export async function POST(req: NextRequest) {
 
   if (error || !inserted?.id) {
     console.error("[focus sessions] insert failed", error);
+    await cleanupHmsRoom(created.id, accessKey, secret);
     return NextResponse.json(
       { error: "Failed to store session" },
       { status: 500 },
@@ -611,13 +668,14 @@ export async function POST(req: NextRequest) {
   const { error: participantError } = await sb
     .from("focus_session_participants")
     .upsert(
-      { session_id: inserted.id, user_id: user.id },
+      { session_id: inserted.id, user_id: user.id, role: "host" },
       { onConflict: "session_id,user_id" },
     );
 
   if (participantError) {
     console.error("[focus sessions] host insert failed", participantError);
     await sb.from("focus_sessions").delete().eq("id", inserted.id);
+    await cleanupHmsRoom(created.id, accessKey, secret);
     return NextResponse.json(
       { error: "Failed to store session" },
       { status: 500 },
