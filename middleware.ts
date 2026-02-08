@@ -100,6 +100,13 @@ const PUBLIC_API_BYPASS_PATHS = ["/api/leaderboard/ingest"];
 // treat common static assets as public
 const STATIC_EXT = /\.(?:png|svg|jpg|jpeg|gif|webp|ico|txt|xml|html)$/i;
 
+const LIVE_STUDIO_CONNECT_SRC: string[] = [
+  // 100ms uses HTTPS + WSS endpoints for room signaling and media transport.
+  "https://*.100ms.live",
+  "wss://*.100ms.live",
+  "https://api.100ms.live",
+];
+
 function isAdminPath(pathname: string): boolean {
   if (pathname === "/admin" || pathname.startsWith("/admin/")) return true;
   if (pathname === "/community/admin" || pathname.startsWith("/community/admin/")) {
@@ -243,9 +250,14 @@ export async function middleware(req: NextRequest) {
   const isTimerFeaturePage =
     url.pathname === "/feature/timer" ||
     url.pathname.startsWith("/feature/timer/");
-  const securityContext = isTimerFeaturePage
-    ? { ...baseSecurityContext, allowIframe: true }
-    : baseSecurityContext;
+  const isLiveStudioRoute = url.pathname.startsWith("/feature/live");
+  const securityContext = {
+    ...baseSecurityContext,
+    ...(isTimerFeaturePage ? { allowIframe: true } : {}),
+    ...(isLiveStudioRoute
+      ? { allowMedia: true, extraConnectSrc: LIVE_STUDIO_CONNECT_SRC }
+      : {}),
+  };
 
   const isTimerPath = url.pathname.startsWith("/timer/");
 

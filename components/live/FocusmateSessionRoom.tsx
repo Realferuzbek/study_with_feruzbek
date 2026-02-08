@@ -61,6 +61,54 @@ type SessionWindow = {
   status: string | null;
 };
 
+const JOIN_TIMEOUT_MS = 18_000;
+const JOIN_TIMEOUT_ERROR_CODE = "focus_session_join_timeout";
+const JOIN_TIMEOUT_MESSAGE =
+  "Connection timed out while joining. This may be caused by blocked WebSocket/CSP/network traffic. Check DevTools for connect-src or WebSocket errors.";
+
+function createJoinTimeoutError() {
+  const error = new Error("Focus session join timed out") as Error & {
+    code?: string;
+  };
+  error.name = "JoinTimeoutError";
+  error.code = JOIN_TIMEOUT_ERROR_CODE;
+  return error;
+}
+
+function isJoinTimeoutError(error: unknown) {
+  if (error instanceof Error) {
+    const withCode = error as Error & { code?: string };
+    return (
+      withCode.code === JOIN_TIMEOUT_ERROR_CODE ||
+      withCode.name === "JoinTimeoutError"
+    );
+  }
+  if (!error || typeof error !== "object") return false;
+  const record = error as Record<string, unknown>;
+  return (
+    record.code === JOIN_TIMEOUT_ERROR_CODE ||
+    record.name === "JoinTimeoutError"
+  );
+}
+
+async function runWithJoinTimeout(task: Promise<void>) {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      task,
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          reject(createJoinTimeoutError());
+        }, JOIN_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
@@ -347,10 +395,12 @@ export default function FocusmateSessionRoom({
         }
 
         const tryJoin = async (token: string) => {
-          await hmsActions.join({
-            userName: displayName,
-            authToken: token,
-          });
+          await runWithJoinTimeout(
+            hmsActions.join({
+              userName: displayName,
+              authToken: token,
+            }),
+          );
         };
 
         if (authToken) {
@@ -358,6 +408,14 @@ export default function FocusmateSessionRoom({
             await tryJoin(authToken);
             return;
           } catch (err) {
+            if (isJoinTimeoutError(err)) {
+              console.error(
+                "[focus sessions] join with cached token timed out",
+                err,
+              );
+              if (active) setJoinError(JOIN_TIMEOUT_MESSAGE);
+              return;
+            }
             console.error("[focus sessions] join with cached token failed", err);
           }
         }
@@ -404,7 +462,12 @@ export default function FocusmateSessionRoom({
         await tryJoin(token);
       } catch (err) {
         console.error(err);
-        if (active) setJoinError("Unable to join session.");
+        if (!active) return;
+        if (isJoinTimeoutError(err)) {
+          setJoinError(JOIN_TIMEOUT_MESSAGE);
+        } else {
+          setJoinError("Unable to join session.");
+        }
       } finally {
         if (active) setJoining(false);
       }
@@ -421,6 +484,11 @@ export default function FocusmateSessionRoom({
     leftSessionStorageKey,
     sessionId,
   ]);
+
+  React.useEffect(() => {
+    if (!isConnected || !joinError) return;
+    setJoinError(null);
+  }, [isConnected, joinError]);
 
   React.useEffect(() => {
     return () => {

@@ -9,7 +9,6 @@ import {
   buildHmsRoomName,
   createHmsAuthToken,
   createHmsManagementToken,
-  resolveHmsRole,
 } from "@/lib/voice/hms";
 
 type RouteContext = {
@@ -31,12 +30,36 @@ function isJoinableStatus(status: string | null | undefined) {
   return status === "scheduled" || status === "active";
 }
 
-function resolvePublishableRole(
-  value: string | undefined,
-  fallback: "host" | "peer",
-): HmsRole {
-  const resolved = resolveHmsRole(value ?? fallback);
-  return resolved === "viewer" ? fallback : resolved;
+const FOCUS_SESSION_ROLE_VALUES: HmsRole[] = ["viewer", "host", "admin", "peer"];
+
+type FocusSessionRoleResolution =
+  | { role: HmsRole; error: null }
+  | { role: null; error: string };
+
+function resolveFocusSessionConfiguredRole(
+  envKey: "FOCUS_SESSION_HOST_HMS_ROLE" | "FOCUS_SESSION_PARTICIPANT_HMS_ROLE",
+  rawValue: string | undefined,
+): FocusSessionRoleResolution {
+  if (rawValue === undefined) {
+    return { role: "viewer", error: null };
+  }
+
+  const normalized = rawValue.trim().toLowerCase();
+  if (!normalized) {
+    return {
+      role: null,
+      error: `Invalid ${envKey}: value is empty. Use one of ${FOCUS_SESSION_ROLE_VALUES.join(", ")}, or unset it to default to viewer.`,
+    };
+  }
+
+  if (!FOCUS_SESSION_ROLE_VALUES.includes(normalized as HmsRole)) {
+    return {
+      role: null,
+      error: `Invalid ${envKey}: "${rawValue}" is not supported. Use one of ${FOCUS_SESSION_ROLE_VALUES.join(", ")}, or unset it to default to viewer.`,
+    };
+  }
+
+  return { role: normalized as HmsRole, error: null };
 }
 
 export async function POST(_req: NextRequest, context: RouteContext) {
@@ -159,6 +182,25 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     );
   }
 
+  const hostRoleResult = resolveFocusSessionConfiguredRole(
+    "FOCUS_SESSION_HOST_HMS_ROLE",
+    process.env.FOCUS_SESSION_HOST_HMS_ROLE,
+  );
+  if (hostRoleResult.error) {
+    return NextResponse.json({ error: hostRoleResult.error }, { status: 500 });
+  }
+
+  const participantRoleResult = resolveFocusSessionConfiguredRole(
+    "FOCUS_SESSION_PARTICIPANT_HMS_ROLE",
+    process.env.FOCUS_SESSION_PARTICIPANT_HMS_ROLE,
+  );
+  if (participantRoleResult.error) {
+    return NextResponse.json(
+      { error: participantRoleResult.error },
+      { status: 500 },
+    );
+  }
+
   let roomId = focusSession.room_id ?? null;
   if (!roomId) {
     const roomName = buildHmsRoomName("focus-session", focusSession.id);
@@ -260,15 +302,7 @@ export async function POST(_req: NextRequest, context: RouteContext) {
     }
   }
 
-  const hostRole = resolvePublishableRole(
-    process.env.FOCUS_SESSION_HOST_HMS_ROLE,
-    "host",
-  );
-  const participantRole = resolvePublishableRole(
-    process.env.FOCUS_SESSION_PARTICIPANT_HMS_ROLE,
-    "peer",
-  );
-  const role = isHost ? hostRole : participantRole;
+  const role = isHost ? hostRoleResult.role : participantRoleResult.role;
 
   const token = createHmsAuthToken({
     accessKey,

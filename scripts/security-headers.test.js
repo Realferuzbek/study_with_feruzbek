@@ -23,7 +23,7 @@ function headersForResponse(context) {
   assert.strictEqual(devHeaders.get("X-Frame-Options"), "DENY");
   assert.strictEqual(
     devHeaders.get("Permissions-Policy"),
-    "accelerometer=(), camera=(), geolocation=(), microphone=(), payment=(), usb=(), bluetooth=(), gyroscope=(), magnetometer=()",
+    "accelerometer=(), camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), usb=(), bluetooth=(), gyroscope=(), magnetometer=()",
   );
   assert.strictEqual(
     devHeaders.get("Cross-Origin-Opener-Policy"),
@@ -96,6 +96,12 @@ function headersForResponse(context) {
     { isProduction: false, isSecureTransport: false },
     { isProduction: true, isSecureTransport: true },
     { isProduction: true, isSecureTransport: true, allowIframe: true },
+    {
+      isProduction: true,
+      isSecureTransport: true,
+      allowMedia: true,
+      extraConnectSrc: ["https://*.100ms.live", "wss://*.100ms.live"],
+    },
   ];
 
   for (const context of contexts) {
@@ -107,6 +113,58 @@ function headersForResponse(context) {
       `memoized output must stay identical for ${JSON.stringify(context)}`,
     );
   }
+})();
+
+(function testLiveRouteOverridesRemainScoped() {
+  const defaultHeaders = buildSecurityHeaders({
+    isProduction: true,
+    isSecureTransport: true,
+  });
+  const liveHeaders = buildSecurityHeaders({
+    isProduction: true,
+    isSecureTransport: true,
+    allowMedia: true,
+    extraConnectSrc: [
+      "https://*.100ms.live",
+      "wss://*.100ms.live",
+      "https://api.100ms.live",
+    ],
+  });
+
+  assert.strictEqual(
+    defaultHeaders["Permissions-Policy"],
+    "accelerometer=(), camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), usb=(), bluetooth=(), gyroscope=(), magnetometer=()",
+  );
+  assert.strictEqual(
+    liveHeaders["Permissions-Policy"],
+    "accelerometer=(), camera=(self), display-capture=(self), geolocation=(), microphone=(self), payment=(), usb=(), bluetooth=(), gyroscope=(), magnetometer=()",
+  );
+
+  const defaultCsp =
+    defaultHeaders["Content-Security-Policy"] ||
+    defaultHeaders["Content-Security-Policy-Report-Only"];
+  const liveCsp =
+    liveHeaders["Content-Security-Policy"] ||
+    liveHeaders["Content-Security-Policy-Report-Only"];
+
+  assert(defaultCsp, "default headers should include CSP");
+  assert(liveCsp, "live headers should include CSP");
+  assert(
+    !defaultCsp.includes("100ms.live"),
+    "default CSP must not include live-route 100ms sources",
+  );
+  assert(
+    liveCsp.includes("https://*.100ms.live"),
+    "live CSP should allow https wildcard for 100ms hosts",
+  );
+  assert(
+    liveCsp.includes("wss://*.100ms.live"),
+    "live CSP should allow wss wildcard for 100ms hosts",
+  );
+  assert(
+    liveCsp.includes("https://api.100ms.live"),
+    "live CSP should allow explicit 100ms API host",
+  );
 })();
 
 (function testIframeAllowanceKeepsCspButRemovesXfo() {
