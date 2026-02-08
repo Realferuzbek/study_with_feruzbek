@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useRouter } from "next/navigation";
 import {
   selectCameraStreamByPeerID,
   selectIsConnectedToRoom,
@@ -26,6 +27,12 @@ import {
 } from "lucide-react";
 import { csrfFetch } from "@/lib/csrf-client";
 
+type FocusSessionTiming = {
+  startAt?: string | null;
+  endAt?: string | null;
+  status?: string | null;
+};
+
 type FocusmateSessionRoomProps = {
   sessionId: string;
   user: {
@@ -34,6 +41,7 @@ type FocusmateSessionRoomProps = {
     name?: string | null;
     email?: string | null;
   };
+  session?: FocusSessionTiming;
 };
 
 type VideoTileProps = {
@@ -42,6 +50,97 @@ type VideoTileProps = {
   isLocal: boolean;
   className?: string;
 };
+
+type ControlAction = "mic" | "cam" | "screen" | "pip";
+type FeedbackTone = "info" | "error";
+type ControlPendingState = Record<ControlAction, boolean>;
+
+type SessionWindow = {
+  joinOpenAtMs: number;
+  endAtMs: number;
+  status: string | null;
+};
+
+function cx(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
+}
+
+function parseTimestamp(value: string | null | undefined) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return null;
+  return date;
+}
+
+function normalizeStatus(value: string | null | undefined) {
+  if (!value) return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function readErrorBlob(error: unknown) {
+  if (error instanceof Error) {
+    return `${error.name} ${error.message}`.toLowerCase();
+  }
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const fields = [record.name, record.code, record.message, record.details]
+      .filter((value): value is string => typeof value === "string")
+      .join(" ");
+    return fields.toLowerCase();
+  }
+  if (typeof error === "string") return error.toLowerCase();
+  return "";
+}
+
+function mapControlError(action: ControlAction, error: unknown) {
+  const blob = readErrorBlob(error);
+  const isPermissionIssue =
+    blob.includes("notallowederror") ||
+    blob.includes("permission denied") ||
+    blob.includes("permission blocked");
+  const isMissingDevice =
+    blob.includes("notfounderror") ||
+    blob.includes("requested device not found") ||
+    blob.includes("device not found") ||
+    blob.includes("no device");
+  const isCancelled =
+    blob.includes("aborterror") ||
+    blob.includes("cancel") ||
+    blob.includes("dismissed");
+
+  if (action === "mic") {
+    if (isPermissionIssue) return "Microphone permission blocked.";
+    if (isMissingDevice) return "No microphone found.";
+    return "Unable to update microphone.";
+  }
+
+  if (action === "cam") {
+    if (isPermissionIssue) return "Camera permission blocked.";
+    if (isMissingDevice) return "No camera found.";
+    return "Unable to update camera.";
+  }
+
+  if (action === "screen") {
+    if (isCancelled) return "Screen share canceled.";
+    if (isPermissionIssue) return "Screen share permission blocked.";
+    return "Unable to update screen share.";
+  }
+
+  return "Picture-in-Picture unavailable.";
+}
+
+function isJoinableStatus(status: string | null) {
+  return status === "scheduled" || status === "active" || status === null;
+}
+
+function getJoinTokenKey(sessionId: string) {
+  return `focus-session-token:${sessionId}`;
+}
+
+function getLeftSessionKey(sessionId: string) {
+  return `left_session:${sessionId}`;
+}
 
 function VideoTile({ peerId, label, isLocal, className }: VideoTileProps) {
   const cameraTrack = useHMSStore(selectCameraStreamByPeerID(peerId));
@@ -132,7 +231,9 @@ function formatLabel(peer?: HMSPeer | null) {
 export default function FocusmateSessionRoom({
   sessionId,
   user,
+  session,
 }: FocusmateSessionRoomProps) {
+  const router = useRouter();
   const hmsActions = useHMSActions();
   const isConnected = useHMSStore(selectIsConnectedToRoom);
   const peers = useHMSStore(selectPeers);
@@ -143,15 +244,77 @@ export default function FocusmateSessionRoom({
 
   const [joining, setJoining] = React.useState(false);
   const [joinError, setJoinError] = React.useState<string | null>(null);
+  const [feedback, setFeedback] = React.useState<{
+    message: string;
+    tone: FeedbackTone;
+  } | null>(null);
   const [pipOverlayOn, setPipOverlayOn] = React.useState(false);
   const [pipVideoEl, setPipVideoEl] = React.useState<HTMLVideoElement | null>(
     null,
   );
+  const [isPipActive, setIsPipActive] = React.useState(false);
+  const [sessionClosedByHistory, setSessionClosedByHistory] =
+    React.useState(false);
+  const [endingDueToTime, setEndingDueToTime] = React.useState(false);
+  const [pendingControls, setPendingControls] =
+    React.useState<ControlPendingState>({
+      mic: false,
+      cam: false,
+      screen: false,
+      pip: false,
+    });
 
   const joinRequested = React.useRef(false);
+  const sessionEndingHandledRef = React.useRef(false);
 
-  const displayName =
-    user.displayName || user.name || user.email || "Guest";
+  const displayName = user.displayName || user.name || user.email || "Guest";
+  const joinTokenStorageKey = React.useMemo(
+    () => getJoinTokenKey(sessionId),
+    [sessionId],
+  );
+  const leftSessionStorageKey = React.useMemo(
+    () => getLeftSessionKey(sessionId),
+    [sessionId],
+  );
+  const sessionWindow = React.useMemo<SessionWindow | null>(() => {
+    const startAt = parseTimestamp(session?.startAt ?? null);
+    const endAt = parseTimestamp(session?.endAt ?? null);
+    if (!startAt || !endAt) return null;
+    return {
+      joinOpenAtMs: startAt.getTime() - 10 * 60 * 1000,
+      endAtMs: endAt.getTime(),
+      status: normalizeStatus(session?.status ?? null),
+    };
+  }, [session?.endAt, session?.startAt, session?.status]);
+  const isWithinJoinWindow = React.useMemo(() => {
+    if (!sessionWindow) return false;
+    if (!isJoinableStatus(sessionWindow.status)) return false;
+    const now = Date.now();
+    return now >= sessionWindow.joinOpenAtMs && now <= sessionWindow.endAtMs;
+  }, [sessionWindow]);
+
+  const showFeedback = React.useCallback(
+    (message: string, tone: FeedbackTone = "info") => {
+      setFeedback({ message, tone });
+    },
+    [],
+  );
+
+  const setControlPending = React.useCallback(
+    (action: ControlAction, pending: boolean) => {
+      setPendingControls((prev) => {
+        if (prev[action] === pending) return prev;
+        return { ...prev, [action]: pending };
+      });
+    },
+    [],
+  );
+
+  React.useEffect(() => {
+    if (!feedback) return;
+    const timer = window.setTimeout(() => setFeedback(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [feedback]);
 
   React.useEffect(() => {
     if (joinRequested.current) return;
@@ -161,14 +324,26 @@ export default function FocusmateSessionRoom({
     (async () => {
       setJoining(true);
       setJoinError(null);
+      setSessionClosedByHistory(false);
       try {
-        const storageKey = `focus-session-token:${sessionId}`;
         let authToken: string | null = null;
+        let hasLeftFlag = false;
         if (typeof window !== "undefined") {
-          authToken = window.sessionStorage.getItem(storageKey);
+          authToken = window.sessionStorage.getItem(joinTokenStorageKey);
+          hasLeftFlag = Boolean(
+            window.sessionStorage.getItem(leftSessionStorageKey),
+          );
           if (authToken) {
-            window.sessionStorage.removeItem(storageKey);
+            window.sessionStorage.removeItem(joinTokenStorageKey);
+            window.sessionStorage.removeItem(leftSessionStorageKey);
           }
+        }
+
+        if (!authToken && hasLeftFlag && isWithinJoinWindow) {
+          if (active) {
+            setSessionClosedByHistory(true);
+          }
+          return;
         }
 
         const tryJoin = async (token: string) => {
@@ -184,7 +359,6 @@ export default function FocusmateSessionRoom({
             return;
           } catch (err) {
             console.error("[focus sessions] join with cached token failed", err);
-            authToken = null;
           }
         }
 
@@ -239,13 +413,75 @@ export default function FocusmateSessionRoom({
     return () => {
       active = false;
     };
-  }, [displayName, hmsActions, sessionId]);
+  }, [
+    displayName,
+    hmsActions,
+    isWithinJoinWindow,
+    joinTokenStorageKey,
+    leftSessionStorageKey,
+    sessionId,
+  ]);
 
   React.useEffect(() => {
     return () => {
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(leftSessionStorageKey, String(Date.now()));
+      }
       hmsActions.leave().catch(() => {});
     };
-  }, [hmsActions]);
+  }, [hmsActions, leftSessionStorageKey]);
+
+  React.useEffect(() => {
+    if (!sessionWindow?.endAtMs || sessionEndingHandledRef.current) return;
+    let timer: number | null = null;
+
+    const handleSessionEnd = async () => {
+      if (sessionEndingHandledRef.current) return;
+      if (Date.now() < sessionWindow.endAtMs) return;
+      sessionEndingHandledRef.current = true;
+      setEndingDueToTime(true);
+      showFeedback("Session ended.", "info");
+      try {
+        await hmsActions.leave();
+      } catch {
+      } finally {
+        window.setTimeout(() => {
+          router.replace("/feature/live");
+        }, 450);
+      }
+    };
+
+    void handleSessionEnd();
+    timer = window.setInterval(() => {
+      void handleSessionEnd();
+    }, 15_000);
+
+    return () => {
+      if (timer !== null) window.clearInterval(timer);
+    };
+  }, [hmsActions, router, sessionWindow?.endAtMs, showFeedback]);
+
+  React.useEffect(() => {
+    const video = pipVideoEl;
+    if (!video) return;
+
+    const handleEnter = () => {
+      setIsPipActive(true);
+      setPipOverlayOn(true);
+    };
+    const handleLeave = () => {
+      setIsPipActive(false);
+      setPipOverlayOn(false);
+    };
+
+    video.addEventListener("enterpictureinpicture", handleEnter);
+    video.addEventListener("leavepictureinpicture", handleLeave);
+
+    return () => {
+      video.removeEventListener("enterpictureinpicture", handleEnter);
+      video.removeEventListener("leavepictureinpicture", handleLeave);
+    };
+  }, [pipVideoEl]);
 
   const orderedPeers = React.useMemo(() => {
     const next = [...peers];
@@ -266,54 +502,162 @@ export default function FocusmateSessionRoom({
   const pipCameraTrack = useHMSStore(selectCameraStreamByPeerID(pipPeerId));
   const pipScreenShare = useHMSStore(selectScreenSharesByPeerId(pipPeerId));
   const pipTrackId = pipScreenShare?.video?.id ?? pipCameraTrack?.id;
+  const controlsLocked = joining || !isConnected || endingDueToTime;
 
-  async function toggleMic() {
+  const micLabel = pendingControls.mic
+    ? isMicOn
+      ? "Muting..."
+      : "Unmuting..."
+    : isMicOn
+      ? "Mute"
+      : "Unmute";
+  const camLabel = pendingControls.cam
+    ? isCamOn
+      ? "Turning off..."
+      : "Turning on..."
+    : isCamOn
+      ? "Camera off"
+      : "Camera on";
+  const shareLabel = pendingControls.screen
+    ? isShareOn
+      ? "Stopping..."
+      : "Starting..."
+    : isShareOn
+      ? "Stop share"
+      : "Share screen";
+  const pipLabelText = pendingControls.pip
+    ? "Working..."
+    : isPipActive
+      ? "Exit PiP"
+      : "PiP";
+
+  const toggleMic = React.useCallback(async () => {
+    if (pendingControls.mic || controlsLocked) return;
+    setControlPending("mic", true);
     try {
       await hmsActions.setLocalAudioEnabled(!isMicOn);
     } catch (err) {
       console.error(err);
+      showFeedback(mapControlError("mic", err), "error");
+    } finally {
+      setControlPending("mic", false);
     }
-  }
+  }, [
+    controlsLocked,
+    hmsActions,
+    isMicOn,
+    pendingControls.mic,
+    setControlPending,
+    showFeedback,
+  ]);
 
-  async function toggleCam() {
+  const toggleCam = React.useCallback(async () => {
+    if (pendingControls.cam || controlsLocked) return;
+    setControlPending("cam", true);
     try {
       await hmsActions.setLocalVideoEnabled(!isCamOn);
     } catch (err) {
       console.error(err);
+      showFeedback(mapControlError("cam", err), "error");
+    } finally {
+      setControlPending("cam", false);
     }
-  }
+  }, [
+    controlsLocked,
+    hmsActions,
+    isCamOn,
+    pendingControls.cam,
+    setControlPending,
+    showFeedback,
+  ]);
 
-  async function toggleScreenShare() {
+  const toggleScreenShare = React.useCallback(async () => {
+    if (pendingControls.screen || controlsLocked) return;
+    setControlPending("screen", true);
     try {
       await hmsActions.setScreenShareEnabled(!isShareOn);
     } catch (err) {
       console.error(err);
+      showFeedback(mapControlError("screen", err), "error");
+    } finally {
+      setControlPending("screen", false);
     }
-  }
+  }, [
+    controlsLocked,
+    hmsActions,
+    isShareOn,
+    pendingControls.screen,
+    setControlPending,
+    showFeedback,
+  ]);
 
-  async function togglePip() {
-    const nextState = !pipOverlayOn;
-    setPipOverlayOn(nextState);
+  const togglePip = React.useCallback(async () => {
+    if (pendingControls.pip || controlsLocked) return;
+    setControlPending("pip", true);
+    try {
+      if (typeof document === "undefined") {
+        showFeedback("Picture-in-Picture unavailable.", "error");
+        return;
+      }
 
-    if (typeof document === "undefined") return;
-
-    if (document.pictureInPictureElement) {
-      try {
+      if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
-      } catch (err) {
-        console.error(err);
+        setIsPipActive(false);
+        setPipOverlayOn(false);
+        return;
       }
-      return;
-    }
 
-    if (!nextState || !pipVideoEl) return;
-    if (document.pictureInPictureEnabled && pipVideoEl.requestPictureInPicture) {
-      try {
-        await pipVideoEl.requestPictureInPicture();
-      } catch (err) {
-        console.error(err);
+      if (!pipVideoEl || !document.pictureInPictureEnabled) {
+        setPipOverlayOn(false);
+        showFeedback("Picture-in-Picture unavailable.", "error");
+        return;
       }
+
+      if (typeof pipVideoEl.requestPictureInPicture !== "function") {
+        setPipOverlayOn(false);
+        showFeedback("Picture-in-Picture unavailable.", "error");
+        return;
+      }
+
+      setPipOverlayOn(true);
+      await pipVideoEl.requestPictureInPicture();
+      setIsPipActive(true);
+    } catch (err) {
+      console.error(err);
+      setPipOverlayOn(false);
+      showFeedback(mapControlError("pip", err), "error");
+    } finally {
+      setControlPending("pip", false);
     }
+  }, [
+    controlsLocked,
+    pendingControls.pip,
+    pipVideoEl,
+    setControlPending,
+    showFeedback,
+  ]);
+
+  if (sessionClosedByHistory) {
+    return (
+      <div className="flex min-h-[100dvh] items-center justify-center bg-[radial-gradient(circle_at_top,_#172032,_#0b1117_55%,_#070b11_100%)] px-4 text-white">
+        <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-black/40 p-6 text-center shadow-[0_20px_60px_rgba(0,0,0,0.5)]">
+          <p className="text-xs uppercase tracking-[0.28em] text-white/50">
+            Focus session
+          </p>
+          <h1 className="mt-3 text-2xl font-semibold">Session closed</h1>
+          <p className="mt-3 text-sm text-white/65">
+            You left this call. Rejoin from Live Studio when you are ready.
+          </p>
+          <button
+            type="button"
+            onClick={() => router.replace("/feature/live")}
+            className="mt-6 inline-flex h-11 items-center justify-center rounded-full border border-white/20 bg-white/10 px-6 text-sm font-semibold text-white transition hover:bg-white/20"
+          >
+            Back to Studio
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -325,15 +669,30 @@ export default function FocusmateSessionRoom({
               Focus session
             </div>
             <div>
-              {joinError
-                ? "Unable to join"
-                : joining
-                  ? "Connecting..."
-                  : isConnected
-                    ? "Live"
-                    : "Waiting to connect"}
+              {endingDueToTime
+                ? "Session ended"
+                : joinError
+                  ? "Unable to join"
+                  : joining
+                    ? "Connecting..."
+                    : isConnected
+                      ? "Live"
+                      : "Waiting to connect"}
             </div>
           </div>
+
+          {feedback ? (
+            <div
+              className={cx(
+                "rounded-2xl border p-3 text-sm",
+                feedback.tone === "error"
+                  ? "border-rose-500/40 bg-rose-500/10 text-rose-200"
+                  : "border-sky-500/40 bg-sky-500/10 text-sky-100",
+              )}
+            >
+              {feedback.message}
+            </div>
+          ) : null}
 
           {joinError ? (
             <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
@@ -395,61 +754,77 @@ export default function FocusmateSessionRoom({
           <button
             type="button"
             onClick={toggleMic}
-            className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition ${
+            disabled={pendingControls.mic || controlsLocked}
+            className={cx(
+              "inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition",
               isMicOn
                 ? "bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30"
-                : "bg-rose-500/20 text-rose-100 hover:bg-rose-500/30"
-            }`}
+                : "bg-rose-500/20 text-rose-100 hover:bg-rose-500/30",
+              (pendingControls.mic || controlsLocked) &&
+                "cursor-not-allowed opacity-60 hover:bg-inherit",
+            )}
           >
             {isMicOn ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />}
-            {isMicOn ? "Mute" : "Unmute"}
+            {micLabel}
           </button>
 
           <button
             type="button"
             onClick={toggleCam}
-            className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition ${
+            disabled={pendingControls.cam || controlsLocked}
+            className={cx(
+              "inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition",
               isCamOn
                 ? "bg-white/10 text-white hover:bg-white/20"
-                : "bg-white/10 text-white/70 hover:bg-white/20"
-            }`}
+                : "bg-white/10 text-white/70 hover:bg-white/20",
+              (pendingControls.cam || controlsLocked) &&
+                "cursor-not-allowed opacity-60 hover:bg-inherit",
+            )}
           >
             {isCamOn ? (
               <VideoOff className="h-4 w-4" />
             ) : (
               <Video className="h-4 w-4" />
             )}
-            {isCamOn ? "Camera off" : "Camera on"}
+            {camLabel}
           </button>
 
           <button
             type="button"
             onClick={toggleScreenShare}
-            className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition ${
+            disabled={pendingControls.screen || controlsLocked}
+            className={cx(
+              "inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition",
               isShareOn
                 ? "bg-indigo-500/20 text-indigo-100 hover:bg-indigo-500/30"
-                : "bg-white/10 text-white/70 hover:bg-white/20"
-            }`}
+                : "bg-white/10 text-white/70 hover:bg-white/20",
+              (pendingControls.screen || controlsLocked) &&
+                "cursor-not-allowed opacity-60 hover:bg-inherit",
+            )}
           >
             {isShareOn ? (
               <MonitorOff className="h-4 w-4" />
             ) : (
               <MonitorUp className="h-4 w-4" />
             )}
-            {isShareOn ? "Stop share" : "Share screen"}
+            {shareLabel}
           </button>
 
           <button
             type="button"
             onClick={togglePip}
-            className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition ${
-              pipOverlayOn
+            disabled={pendingControls.pip || controlsLocked || !pipTrackId}
+            className={cx(
+              "inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition",
+              isPipActive
                 ? "bg-sky-500/20 text-sky-100 hover:bg-sky-500/30"
-                : "bg-white/10 text-white/70 hover:bg-white/20"
-            }`}
+                : "bg-white/10 text-white/70 hover:bg-white/20",
+              (pendingControls.pip || controlsLocked || !pipTrackId) &&
+                "cursor-not-allowed opacity-60 hover:bg-inherit",
+            )}
           >
             <PictureInPicture2 className="h-4 w-4" />
-            PiP
+            {pipLabelText}
           </button>
         </div>
       </div>
