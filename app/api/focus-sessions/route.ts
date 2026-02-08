@@ -323,7 +323,7 @@ export async function GET(req: NextRequest) {
     )
     .gte("start_at", from.toISOString())
     .lte("start_at", to.toISOString())
-    .in("status", ["scheduled", "active", "cancelled"])
+    .in("status", ["scheduled", "active"])
     .order("start_at", { ascending: true });
 
   if (error) {

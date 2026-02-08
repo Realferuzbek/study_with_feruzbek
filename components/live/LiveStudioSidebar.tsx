@@ -1,10 +1,8 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Home, Settings, type LucideIcon } from "lucide-react";
-import { useState } from "react";
 
 type LiveStudioSidebarProps = {
   user?: {
@@ -34,26 +32,24 @@ export default function LiveStudioSidebar({
   user: _user,
 }: LiveStudioSidebarProps) {
   const pathname = usePathname();
-  const [isLogoUnavailable, setIsLogoUnavailable] = useState(false);
 
   return (
     <aside className="flex w-full items-center justify-center gap-4 bg-gradient-to-b from-[#686ff0] to-[#4f59df] px-3 py-3 text-white shadow-[inset_-1px_0_0_rgba(255,255,255,0.12)] md:w-[76px] md:flex-col md:justify-start md:py-6">
       <Link href="/dashboard" aria-label="StudyMate dashboard" title="Dashboard">
-        <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full bg-white/95 text-[#4f59df] shadow-[0_10px_18px_rgba(0,0,0,0.2)]">
-          {isLogoUnavailable ? (
-            <span className="text-[11px] font-semibold tracking-[0.08em]">
-              SM
-            </span>
-          ) : (
-            <Image
-              src="/logo.svg"
-              alt="StudyMate"
-              width={28}
-              height={28}
-              className="h-7 w-7 object-contain"
-              onError={() => setIsLogoUnavailable(true)}
+        <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#6B5BFF] text-white shadow-[0_10px_18px_rgba(0,0,0,0.2)] transition hover:bg-[#7a6cff]">
+          <svg
+            viewBox="0 0 24 24"
+            className="h-5 w-5"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <path
+              d="M12 4.5c-3.77 0-6.5 2.68-6.5 6.3 0 3.37 2.4 5.81 5.6 6.34v2.2a1 1 0 0 0 2 0v-2.2c3.2-.53 5.6-2.97 5.6-6.34 0-3.62-2.73-6.3-6.7-6.3Z"
+              fill="currentColor"
             />
-          )}
+            <circle cx="12" cy="10.8" r="3.1" fill="#6B5BFF" />
+          </svg>
         </span>
       </Link>
 

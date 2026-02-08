@@ -272,6 +272,14 @@ export default function LiveStreamStudioShell({
     () => sessionsEntry?.sessions ?? EMPTY_SESSIONS,
     [sessionsEntry?.sessions],
   );
+  const calendarSessions = useMemo(
+    () =>
+      sessions.filter((session) => {
+        const normalizedStatus = (session.status ?? "scheduled").toLowerCase();
+        return normalizedStatus !== "cancelled" && normalizedStatus !== "completed";
+      }),
+    [sessions],
+  );
   const isRangeLoading = sessionsEntry?.isLoading ?? false;
   const sessionsError = sessionsEntry?.error ?? null;
   const isInitialLoadPending =
@@ -1116,6 +1124,29 @@ export default function LiveStreamStudioShell({
           return;
         }
         setNotice("Session cancelled.");
+        setSessionsCache((prev) => {
+          let didChange = false;
+          const updatedAt = Date.now();
+          const next: Record<string, SessionCacheEntry> = {};
+          for (const [rangeKey, entry] of Object.entries(prev)) {
+            const nextSessions = entry.sessions.filter(
+              (session) => session.id !== sessionId,
+            );
+            if (nextSessions.length !== entry.sessions.length) {
+              didChange = true;
+              sessionsSignatureByRangeRef.current[rangeKey] =
+                buildSessionsSignature(nextSessions);
+              next[rangeKey] = {
+                ...entry,
+                sessions: nextSessions,
+                updatedAt,
+              };
+            } else {
+              next[rangeKey] = entry;
+            }
+          }
+          return didChange ? next : prev;
+        });
         if (selectedSessionId === sessionId) {
           setSelectedSessionId(null);
         }
@@ -1175,7 +1206,7 @@ export default function LiveStreamStudioShell({
             />
 
             <LiveStudioCalendar3Day
-              bookings={sessions}
+              bookings={calendarSessions}
               selectedBookingId={selectedSessionId}
               onSelectBooking={setSelectedSessionId}
               onCreateBooking={handleCreateBooking}

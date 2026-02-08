@@ -198,6 +198,12 @@ export default function LiveStudioCalendar3Day({
   const lastRangeChangeRef = useRef<{ fromMs: number; toMs: number } | null>(
     null,
   );
+  const userScrolledRef = useRef(false);
+  const hasAutoScrolledRef = useRef(false);
+  const isProgrammaticScrollRef = useRef(false);
+  const programmaticScrollResetTimerRef = useRef<number | null>(null);
+  const lastFocusAutoScrollAtRef = useRef(0);
+  const hasHandledFocusSignalRef = useRef(false);
 
   const days = useMemo(
     () => [0, 1, 2].map((offset) => addDays(startDate, offset)),
@@ -254,31 +260,79 @@ export default function LiveStudioCalendar3Day({
     });
   }, [startDate]);
 
-  useEffect(() => {
-    const scrollEl = scrollRef.current;
-    if (!scrollEl) return;
-    const current = new Date();
-    const minutes = current.getHours() * 60 + current.getMinutes();
-    const scrollTop = clamp(
-      (minutes / SLOT_MINUTES) * SLOT_HEIGHT - 200,
-      0,
-      totalHeight,
-    );
-    scrollEl.scrollTo({ top: scrollTop, behavior: "smooth" });
-  }, [focusSignal, totalHeight]);
+  const scrollToCurrentTime = useCallback(
+    ({ behavior = "auto" }: { behavior?: ScrollBehavior } = {}) => {
+      const scrollEl = scrollRef.current;
+      if (!scrollEl) return;
+      const current = new Date();
+      const minutes = current.getHours() * 60 + current.getMinutes();
+      const scrollTop = clamp(
+        (minutes / SLOT_MINUTES) * SLOT_HEIGHT - 200,
+        0,
+        totalHeight,
+      );
+      isProgrammaticScrollRef.current = true;
+      scrollEl.scrollTo({ top: scrollTop, behavior });
+      hasAutoScrolledRef.current = true;
+      if (programmaticScrollResetTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollResetTimerRef.current);
+      }
+      programmaticScrollResetTimerRef.current = window.setTimeout(() => {
+        isProgrammaticScrollRef.current = false;
+        programmaticScrollResetTimerRef.current = null;
+      }, behavior === "smooth" ? 360 : 120);
+    },
+    [totalHeight],
+  );
+
+  const handleCalendarScroll = useCallback(() => {
+    if (isProgrammaticScrollRef.current || !hasAutoScrolledRef.current) return;
+    userScrolledRef.current = true;
+  }, []);
+
+  const maybeAutoScrollOnReturn = useCallback(() => {
+    if (document.visibilityState !== "visible") return;
+    if (userScrolledRef.current && selectedBookingId) return;
+    const nowMs = Date.now();
+    if (nowMs - lastFocusAutoScrollAtRef.current < 250) return;
+    lastFocusAutoScrollAtRef.current = nowMs;
+    scrollToCurrentTime({ behavior: "auto" });
+  }, [scrollToCurrentTime, selectedBookingId]);
 
   useEffect(() => {
-    const scrollEl = scrollRef.current;
-    if (!scrollEl) return;
-    const current = new Date();
-    const minutes = current.getHours() * 60 + current.getMinutes();
-    const scrollTop = clamp(
-      (minutes / SLOT_MINUTES) * SLOT_HEIGHT - 200,
-      0,
-      totalHeight,
-    );
-    scrollEl.scrollTop = scrollTop;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!hasHandledFocusSignalRef.current) {
+      hasHandledFocusSignalRef.current = true;
+      return;
+    }
+    scrollToCurrentTime({ behavior: "smooth" });
+  }, [focusSignal, scrollToCurrentTime]);
+
+  useEffect(() => {
+    scrollToCurrentTime({ behavior: "auto" });
+  }, [scrollToCurrentTime]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      maybeAutoScrollOnReturn();
+    };
+    const handleWindowFocus = () => {
+      maybeAutoScrollOnReturn();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleWindowFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [maybeAutoScrollOnReturn]);
+
+  useEffect(() => {
+    return () => {
+      if (programmaticScrollResetTimerRef.current !== null) {
+        window.clearTimeout(programmaticScrollResetTimerRef.current);
+      }
+    };
   }, []);
 
   function handleShift(daysToShift: number) {
@@ -463,15 +517,14 @@ export default function LiveStudioCalendar3Day({
           <div className="grid grid-cols-[var(--studio-time-gutter-width)_1fr] items-center gap-3">
             <div aria-hidden />
             <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 text-sm font-semibold text-[var(--studio-text)]"
-              >
-                {formatMonthYear(startDate)}
-                <ChevronDown className="h-4 w-4 text-[var(--studio-muted)]" />
-              </button>
-
-              <div className="ml-auto flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 text-sm font-semibold text-[var(--studio-text)]"
+                >
+                  {formatMonthYear(startDate)}
+                  <ChevronDown className="h-4 w-4 text-[var(--studio-muted)]" />
+                </button>
                 <button
                   type="button"
                   className="inline-flex h-10 items-center gap-2 rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)] px-3 text-sm font-semibold text-[var(--studio-text)]"
@@ -479,7 +532,9 @@ export default function LiveStudioCalendar3Day({
                   3 days
                   <ChevronDown className="h-4 w-4 text-[var(--studio-muted)]" />
                 </button>
+              </div>
 
+              <div className="ml-auto flex flex-wrap items-center gap-2 max-sm:ml-0 max-sm:w-full max-sm:justify-start">
                 <div className="flex items-center overflow-hidden rounded-xl border border-[var(--studio-border)] bg-[var(--studio-panel)]">
                   <button
                     type="button"
@@ -595,6 +650,7 @@ export default function LiveStudioCalendar3Day({
 
         <div
           ref={scrollRef}
+          onScroll={handleCalendarScroll}
           className="relative grid max-h-[70vh] grid-cols-[var(--studio-time-gutter-width)_1fr] overflow-y-auto bg-[var(--studio-card)] [scrollbar-gutter:stable] [scrollbar-width:thin] [scrollbar-color:var(--studio-grid-strong)_transparent] dark:[color-scheme:dark] [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar]:w-2.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[var(--studio-grid-strong)] hover:[&::-webkit-scrollbar-thumb]:bg-[var(--studio-muted)]"
         >
           <div
