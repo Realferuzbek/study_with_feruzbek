@@ -61,10 +61,30 @@ type SessionWindow = {
   status: string | null;
 };
 
-const JOIN_TIMEOUT_MS = 18_000;
+const JOIN_TIMEOUT_MS = 45_000;
+const JOIN_CONNECTING_HINT_DELAY_MS = 12_000;
+const RECONNECT_MAX_RETRIES = 3;
+const RECONNECT_BACKOFF_MS = [1_000, 2_500, 5_000];
 const JOIN_TIMEOUT_ERROR_CODE = "focus_session_join_timeout";
 const JOIN_TIMEOUT_MESSAGE =
   "Connection timed out while joining. This may be caused by blocked WebSocket/CSP/network traffic. Check DevTools for connect-src or WebSocket errors.";
+const JOIN_CONNECTING_HINT_MESSAGE =
+  "Still connecting. This can take up to 45 seconds on slower networks.";
+const JOIN_OFFLINE_MESSAGE =
+  "You appear to be offline. Reconnect and try joining again.";
+const RECONNECT_FAILED_MESSAGE =
+  "Connection dropped and automatic reconnect failed. Try again.";
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function readIsOffline() {
+  if (typeof navigator === "undefined") return false;
+  return navigator.onLine === false;
+}
 
 function createJoinTimeoutError() {
   const error = new Error("Focus session join timed out") as Error & {
@@ -193,8 +213,14 @@ function getLeftSessionKey(sessionId: string) {
 function VideoTile({ peerId, label, isLocal, className }: VideoTileProps) {
   const cameraTrack = useHMSStore(selectCameraStreamByPeerID(peerId));
   const screenShare = useHMSStore(selectScreenSharesByPeerId(peerId));
-  const trackId = screenShare?.video?.id ?? cameraTrack?.id;
-  const { videoRef } = useVideo({ trackId });
+  const screenTrackId = screenShare?.video?.id;
+  const cameraTrackId = cameraTrack?.id;
+  const mainTrackId = screenTrackId ?? cameraTrackId;
+  const overlayTrackId = screenTrackId && cameraTrackId ? cameraTrackId : null;
+  const { videoRef: mainVideoRef } = useVideo({ trackId: mainTrackId });
+  const { videoRef: overlayVideoRef } = useVideo({
+    trackId: overlayTrackId ?? undefined,
+  });
 
   return (
     <div
@@ -202,9 +228,9 @@ function VideoTile({ peerId, label, isLocal, className }: VideoTileProps) {
         className ?? ""
       }`}
     >
-      {trackId ? (
+      {mainTrackId ? (
         <video
-          ref={videoRef}
+          ref={mainVideoRef}
           autoPlay
           playsInline
           muted={isLocal}
@@ -217,6 +243,19 @@ function VideoTile({ peerId, label, isLocal, className }: VideoTileProps) {
           Camera off
         </div>
       )}
+      {overlayTrackId ? (
+        <div className="absolute bottom-3 right-3 z-10 h-[28%] w-[28%] min-h-[72px] min-w-[120px] overflow-hidden rounded-xl border border-white/15 bg-black/85 shadow-[0_8px_24px_rgba(0,0,0,0.55)]">
+          <video
+            ref={overlayVideoRef}
+            autoPlay
+            playsInline
+            muted={isLocal}
+            className={`h-full w-full object-cover ${
+              isLocal ? "scale-x-[-1]" : ""
+            }`}
+          />
+        </div>
+      ) : null}
       <div className="absolute bottom-3 left-3 rounded-full bg-black/60 px-3 py-1 text-xs font-medium text-white/80 backdrop-blur">
         {label}
       </div>
@@ -292,6 +331,12 @@ export default function FocusmateSessionRoom({
 
   const [joining, setJoining] = React.useState(false);
   const [joinError, setJoinError] = React.useState<string | null>(null);
+  const [joinAttemptNonce, setJoinAttemptNonce] = React.useState(0);
+  const [showJoinConnectingHint, setShowJoinConnectingHint] =
+    React.useState(false);
+  const [isReconnecting, setIsReconnecting] = React.useState(false);
+  const [isOffline, setIsOffline] = React.useState(readIsOffline);
+  const [retryingJoin, setRetryingJoin] = React.useState(false);
   const [feedback, setFeedback] = React.useState<{
     message: string;
     tone: FeedbackTone;
@@ -312,8 +357,10 @@ export default function FocusmateSessionRoom({
       pip: false,
     });
 
-  const joinRequested = React.useRef(false);
+  const joinAttemptHandledRef = React.useRef<number | null>(null);
   const sessionEndingHandledRef = React.useRef(false);
+  const wasConnectedRef = React.useRef(false);
+  const reconnectInFlightRef = React.useRef(false);
 
   const displayName = user.displayName || user.name || user.email || "Guest";
   const joinTokenStorageKey = React.useMemo(
@@ -365,15 +412,58 @@ export default function FocusmateSessionRoom({
   }, [feedback]);
 
   React.useEffect(() => {
-    if (joinRequested.current) return;
-    joinRequested.current = true;
+    if (typeof window === "undefined") return;
+    const syncOfflineState = () => {
+      const offline = readIsOffline();
+      setIsOffline(offline);
+      if (offline && !isConnected) {
+        setJoinError((current) => current ?? JOIN_OFFLINE_MESSAGE);
+        return;
+      }
+      setJoinError((current) =>
+        current === JOIN_OFFLINE_MESSAGE ? null : current,
+      );
+    };
+    syncOfflineState();
+    window.addEventListener("online", syncOfflineState);
+    window.addEventListener("offline", syncOfflineState);
+    return () => {
+      window.removeEventListener("online", syncOfflineState);
+      window.removeEventListener("offline", syncOfflineState);
+    };
+  }, [isConnected]);
+
+  React.useEffect(() => {
+    if (!joining || isConnected || joinError) {
+      setShowJoinConnectingHint(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setShowJoinConnectingHint(true);
+    }, JOIN_CONNECTING_HINT_DELAY_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [isConnected, joinError, joining]);
+
+  React.useEffect(() => {
+    if (joinAttemptHandledRef.current === joinAttemptNonce) return;
+    joinAttemptHandledRef.current = joinAttemptNonce;
 
     let active = true;
     (async () => {
       setJoining(true);
       setJoinError(null);
+      setShowJoinConnectingHint(false);
       setSessionClosedByHistory(false);
       try {
+        const offline = readIsOffline();
+        setIsOffline(offline);
+        if (offline) {
+          if (active) setJoinError(JOIN_OFFLINE_MESSAGE);
+          return;
+        }
+
         let authToken: string | null = null;
         let hasLeftFlag = false;
         if (typeof window !== "undefined") {
@@ -420,6 +510,14 @@ export default function FocusmateSessionRoom({
           }
         }
 
+        if (readIsOffline()) {
+          if (active) {
+            setIsOffline(true);
+            setJoinError(JOIN_OFFLINE_MESSAGE);
+          }
+          return;
+        }
+
         const res = await csrfFetch(
           `/api/focus-sessions/${sessionId}/token`,
           {
@@ -463,7 +561,10 @@ export default function FocusmateSessionRoom({
       } catch (err) {
         console.error(err);
         if (!active) return;
-        if (isJoinTimeoutError(err)) {
+        if (readIsOffline()) {
+          setIsOffline(true);
+          setJoinError(JOIN_OFFLINE_MESSAGE);
+        } else if (isJoinTimeoutError(err)) {
           setJoinError(JOIN_TIMEOUT_MESSAGE);
         } else {
           setJoinError("Unable to join session.");
@@ -480,6 +581,7 @@ export default function FocusmateSessionRoom({
     displayName,
     hmsActions,
     isWithinJoinWindow,
+    joinAttemptNonce,
     joinTokenStorageKey,
     leftSessionStorageKey,
     sessionId,
@@ -489,6 +591,141 @@ export default function FocusmateSessionRoom({
     if (!isConnected || !joinError) return;
     setJoinError(null);
   }, [isConnected, joinError]);
+
+  React.useEffect(() => {
+    if (isConnected) {
+      wasConnectedRef.current = true;
+      reconnectInFlightRef.current = false;
+      setIsReconnecting(false);
+      return;
+    }
+
+    const droppedFromConnectedState = wasConnectedRef.current;
+    wasConnectedRef.current = false;
+
+    if (!droppedFromConnectedState) return;
+    if (endingDueToTime || sessionClosedByHistory) return;
+    if (!isWithinJoinWindow) return;
+    if (reconnectInFlightRef.current) return;
+
+    reconnectInFlightRef.current = true;
+    let active = true;
+
+    (async () => {
+      setIsReconnecting(true);
+      setJoinError(null);
+      setShowJoinConnectingHint(false);
+
+      let lastError = RECONNECT_FAILED_MESSAGE;
+      for (let attempt = 0; attempt < RECONNECT_MAX_RETRIES; attempt += 1) {
+        if (!active) return;
+        const offline = readIsOffline();
+        setIsOffline(offline);
+        if (offline) {
+          lastError = JOIN_OFFLINE_MESSAGE;
+        } else {
+          try {
+            await hmsActions.leave();
+          } catch {}
+
+          try {
+            const res = await csrfFetch(`/api/focus-sessions/${sessionId}/token`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({}),
+            });
+            const text = await res.text().catch(() => "");
+            if (!res.ok) {
+              const payload = text
+                ? (() => {
+                    try {
+                      return JSON.parse(text);
+                    } catch {
+                      return null;
+                    }
+                  })()
+                : null;
+              lastError = payload?.error ?? "Unable to join session.";
+              console.error(
+                "[focus sessions] reconnect token fetch failed",
+                res.status,
+                text,
+              );
+            } else {
+              const payload = text
+                ? (() => {
+                    try {
+                      return JSON.parse(text);
+                    } catch {
+                      return null;
+                    }
+                  })()
+                : null;
+              const token = payload?.token;
+              if (!token) {
+                lastError = "Unable to join session.";
+                console.error(
+                  "[focus sessions] reconnect token missing",
+                  res.status,
+                  text,
+                );
+              } else {
+                await runWithJoinTimeout(
+                  hmsActions.join({
+                    userName: displayName,
+                    authToken: token,
+                  }),
+                );
+                return;
+              }
+            }
+          } catch (err) {
+            console.error("[focus sessions] reconnect attempt failed", err);
+            if (isJoinTimeoutError(err)) {
+              lastError = JOIN_TIMEOUT_MESSAGE;
+            } else if (err instanceof Error && err.message) {
+              lastError = err.message;
+            } else {
+              lastError = RECONNECT_FAILED_MESSAGE;
+            }
+          }
+        }
+
+        if (attempt < RECONNECT_MAX_RETRIES - 1) {
+          const delay =
+            RECONNECT_BACKOFF_MS[
+              Math.min(attempt, RECONNECT_BACKOFF_MS.length - 1)
+            ];
+          await sleep(delay);
+        }
+      }
+
+      if (active) setJoinError(lastError);
+    })()
+      .catch((err) => {
+        console.error("[focus sessions] reconnect flow failed", err);
+        if (!active) return;
+        setJoinError(RECONNECT_FAILED_MESSAGE);
+      })
+      .finally(() => {
+        reconnectInFlightRef.current = false;
+        if (active) {
+          setIsReconnecting(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    displayName,
+    endingDueToTime,
+    hmsActions,
+    isConnected,
+    isWithinJoinWindow,
+    sessionClosedByHistory,
+    sessionId,
+  ]);
 
   React.useEffect(() => {
     return () => {
@@ -705,6 +942,31 @@ export default function FocusmateSessionRoom({
     showFeedback,
   ]);
 
+  const retryJoin = React.useCallback(async () => {
+    if (retryingJoin || endingDueToTime) return;
+    setRetryingJoin(true);
+    setJoinError(null);
+    setShowJoinConnectingHint(false);
+    setSessionClosedByHistory(false);
+    try {
+      await hmsActions.leave();
+    } catch {}
+    joinAttemptHandledRef.current = null;
+    setJoinAttemptNonce((prev) => prev + 1);
+    setRetryingJoin(false);
+  }, [endingDueToTime, hmsActions, retryingJoin]);
+
+  const showJoinRecoveryPanel =
+    !endingDueToTime &&
+    !isConnected &&
+    (Boolean(joinError) || showJoinConnectingHint || isOffline);
+  const joinRecoveryMessage = joinError
+    ? joinError
+    : isOffline
+      ? JOIN_OFFLINE_MESSAGE
+      : JOIN_CONNECTING_HINT_MESSAGE;
+  const joinRecoveryIsError = Boolean(joinError) || isOffline;
+
   if (sessionClosedByHistory) {
     return (
       <div className="flex min-h-[100dvh] items-center justify-center bg-[radial-gradient(circle_at_top,_#172032,_#0b1117_55%,_#070b11_100%)] px-4 text-white">
@@ -739,6 +1001,10 @@ export default function FocusmateSessionRoom({
             <div>
               {endingDueToTime
                 ? "Session ended"
+                : isReconnecting
+                  ? "Reconnecting..."
+                : isOffline && !isConnected
+                  ? "Offline"
                 : joinError
                   ? "Unable to join"
                   : joining
@@ -762,16 +1028,51 @@ export default function FocusmateSessionRoom({
             </div>
           ) : null}
 
-          {joinError ? (
-            <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">
-              {joinError}
+          {showJoinRecoveryPanel ? (
+            <div
+              className={cx(
+                "rounded-2xl border p-4 text-sm",
+                joinRecoveryIsError
+                  ? "border-rose-500/40 bg-rose-500/10 text-rose-200"
+                  : "border-sky-500/40 bg-sky-500/10 text-sky-100",
+              )}
+            >
+              <p>{joinRecoveryMessage}</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void retryJoin();
+                  }}
+                  disabled={retryingJoin || endingDueToTime}
+                  className={cx(
+                    "inline-flex h-10 items-center justify-center rounded-full border px-4 text-xs font-semibold uppercase tracking-[0.14em] transition",
+                    joinRecoveryIsError
+                      ? "border-rose-300/50 bg-rose-400/20 text-rose-100 hover:bg-rose-400/30"
+                      : "border-sky-300/50 bg-sky-400/20 text-sky-100 hover:bg-sky-400/30",
+                    (retryingJoin || endingDueToTime) &&
+                      "cursor-not-allowed opacity-60 hover:bg-inherit",
+                  )}
+                >
+                  {retryingJoin ? "Retrying..." : "Try again"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.replace("/feature/live")}
+                  className="inline-flex h-10 items-center justify-center rounded-full border border-white/25 bg-white/10 px-4 text-xs font-semibold uppercase tracking-[0.14em] text-white transition hover:bg-white/20"
+                >
+                  Back to Studio
+                </button>
+              </div>
             </div>
           ) : null}
 
           <div className="mx-auto w-full max-w-6xl">
             {peerCount === 0 ? (
               <div className="flex h-[52vh] items-center justify-center rounded-[28px] border border-white/10 bg-black/40 text-sm text-white/60 md:h-[60vh] lg:h-[66vh]">
-                Connecting to the session...
+                {isReconnecting
+                  ? "Reconnecting to the session..."
+                  : "Connecting to the session..."}
               </div>
             ) : peerCount === 1 ? (
               <div className="h-[52vh] md:h-[60vh] lg:h-[66vh]">

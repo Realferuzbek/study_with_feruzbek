@@ -38,6 +38,14 @@ function headersForResponse(context) {
     enforcedCsp.includes("default-src 'self'"),
     "CSP must include default-src self",
   );
+  assert(
+    enforcedCsp.includes("child-src 'self' blob:"),
+    "CSP must allow blob child sources for SDK compatibility",
+  );
+  assert(
+    enforcedCsp.includes("worker-src 'self' blob:"),
+    "CSP must allow blob workers for WebRTC SDK workers",
+  );
   assert.strictEqual(
     devHeaders.get("Strict-Transport-Security"),
     null,
